@@ -33,7 +33,7 @@ text = ""
 theme_override_font_sizes/font_size = 18
 
 [node name="HintLabel" type="Label" parent="VBox"]
-text = "↑/↓ power · Space coast · Esc finish"
+text = "↑/↓ power · ←/→ lane · T turn · Space coast · Esc finish"
 theme_override_font_sizes/font_size = 16
 
 [node name="StatusLabel" type="Label" parent="VBox"]

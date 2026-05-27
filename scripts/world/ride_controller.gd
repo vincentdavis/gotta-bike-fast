@@ -9,6 +9,8 @@ const HUD_SCENE := preload("res://scenes/hud.tscn")
 const POWER_RATE_WPS := 80.0
 const MAX_POWER_W := 1000.0
 const STARTING_POWER_W := 100.0
+const LATERAL_SPEED_MPS := 3.0
+const ROAD_HALF_WIDTH_M := 2.0  # soft clamp so the rider stays on the road
 const SAMPLE_HZ := 4.0
 const SAMPLE_FLUSH_S := 5.0
 
@@ -27,6 +29,7 @@ var target_power_w: float = STARTING_POWER_W
 var velocity_mps: float = 0.0
 var distance_m: float = 0.0
 var elapsed_s: float = 0.0
+var heading: int = 1  # +1 = facing -Z, -1 = turned around (facing +Z)
 
 var _samples_buffer: Array = []
 var _sample_accum_s: float = 0.0
@@ -36,6 +39,9 @@ var _flush_accum_s: float = 0.0
 func _ready() -> void:
 	_setup_environment()
 	_setup_ground()
+	_setup_road()
+	_setup_markers()
+	_setup_scenery()
 	_setup_sun()
 	_setup_rider()
 	_setup_camera()
@@ -63,11 +69,153 @@ func _setup_ground() -> void:
 	var mesh := PlaneMesh.new()
 	mesh.size = Vector2(4000, 4000)
 	ground.mesh = mesh
+
+	# Procedural grass texture: tiled Perlin noise mapped through a green ramp.
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	noise.frequency = 0.04
+	noise.fractal_octaves = 4
+	var noise_tex := NoiseTexture2D.new()
+	noise_tex.noise = noise
+	noise_tex.width = 512
+	noise_tex.height = 512
+	noise_tex.seamless = true
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(0.22, 0.42, 0.20))
+	ramp.set_color(1, Color(0.44, 0.64, 0.32))
+	noise_tex.color_ramp = ramp
+
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.35, 0.55, 0.28)
+	mat.albedo_texture = noise_tex
+	mat.uv1_scale = Vector3(200, 200, 1)
 	mat.roughness = 1.0
 	ground.material_override = mat
 	add_child(ground)
+
+
+func _setup_road() -> void:
+	const ROAD_WIDTH := 4.0
+	const ROAD_LENGTH := 20000.0
+	const LINE_WIDTH := 0.15
+
+	# Asphalt strip down the middle of the field, slightly raised to avoid
+	# z-fighting with the ground. Centered on the rider's path (-Z forward).
+	var road := MeshInstance3D.new()
+	var road_mesh := PlaneMesh.new()
+	road_mesh.size = Vector2(ROAD_WIDTH, ROAD_LENGTH)
+	road.mesh = road_mesh
+	var road_mat := StandardMaterial3D.new()
+	road_mat.albedo_color = Color(0.18, 0.18, 0.20)
+	road_mat.roughness = 0.85
+	road.material_override = road_mat
+	road.position = Vector3(0.0, 0.01, -ROAD_LENGTH * 0.5 + 100.0)
+	add_child(road)
+
+	# Dashed center line via MultiMesh — one draw call for all dashes.
+	const DASH_LENGTH := 3.0
+	const DASH_GAP := 5.0
+	const DASH_COVERAGE := 10000.0  # length of road that gets dashes
+	var dash_period := DASH_LENGTH + DASH_GAP
+	var num_dashes := int(DASH_COVERAGE / dash_period)
+
+	var dashes := MultiMesh.new()
+	dashes.transform_format = MultiMesh.TRANSFORM_3D
+	dashes.instance_count = num_dashes
+	var dash_mesh := PlaneMesh.new()
+	dash_mesh.size = Vector2(LINE_WIDTH, DASH_LENGTH)
+	dashes.mesh = dash_mesh
+	for i in num_dashes:
+		var dz := -(i * dash_period + DASH_LENGTH * 0.5)
+		var t := Transform3D.IDENTITY
+		t.origin = Vector3(0.0, 0.02, dz)
+		dashes.set_instance_transform(i, t)
+
+	var dashes_inst := MultiMeshInstance3D.new()
+	dashes_inst.multimesh = dashes
+	var dash_mat := StandardMaterial3D.new()
+	dash_mat.albedo_color = Color(0.92, 0.92, 0.78)
+	dashes_inst.material_override = dash_mat
+	add_child(dashes_inst)
+
+
+func _setup_markers() -> void:
+	const MARKER_COUNT := 100  # markers up to 10km
+	const SPACING_M := 100.0
+	const SIDE_OFFSET := 3.2
+
+	# One shared mesh + material per marker style — Godot will batch instances.
+	var post_mesh := CylinderMesh.new()
+	post_mesh.height = 1.4
+	post_mesh.top_radius = 0.08
+	post_mesh.bottom_radius = 0.08
+
+	var km_mesh := CylinderMesh.new()
+	km_mesh.height = 2.4
+	km_mesh.top_radius = 0.12
+	km_mesh.bottom_radius = 0.12
+
+	var post_mat := StandardMaterial3D.new()
+	post_mat.albedo_color = Color(0.95, 0.95, 0.95)
+
+	var km_mat := StandardMaterial3D.new()
+	km_mat.albedo_color = Color(0.85, 0.25, 0.15)
+
+	for i in range(1, MARKER_COUNT + 1):
+		var distance := i * SPACING_M
+		var is_km := (i % 10) == 0
+		for side in [-1.0, 1.0]:
+			var post := MeshInstance3D.new()
+			post.mesh = km_mesh if is_km else post_mesh
+			post.material_override = km_mat if is_km else post_mat
+			var height := (km_mesh.height if is_km else post_mesh.height) as float
+			post.position = Vector3(side * SIDE_OFFSET, height * 0.5, -distance)
+			add_child(post)
+
+
+func _setup_scenery() -> void:
+	# Trees: cone meshes scattered randomly beside the road. Single MultiMesh
+	# instance so all trees share one draw call. Per-instance color varies the
+	# greens slightly. Seed is fixed so the layout is reproducible.
+	const TREE_COUNT := 250
+	const MIN_SIDE_DIST := 6.0
+	const MAX_SIDE_DIST := 60.0
+	const Z_COVERAGE := 9500.0
+
+	var trees := MultiMesh.new()
+	trees.transform_format = MultiMesh.TRANSFORM_3D
+	trees.use_colors = true
+	trees.instance_count = TREE_COUNT
+
+	var tree_mesh := CylinderMesh.new()
+	tree_mesh.top_radius = 0.0
+	tree_mesh.bottom_radius = 0.9
+	tree_mesh.height = 3.5
+	trees.mesh = tree_mesh
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0xB1CE_F00D
+
+	for i in TREE_COUNT:
+		var side: float = -1.0 if rng.randf() < 0.5 else 1.0
+		var x_dist: float = rng.randf_range(MIN_SIDE_DIST, MAX_SIDE_DIST) * side
+		var dz: float = -rng.randf_range(20.0, Z_COVERAGE)
+		var s: float = rng.randf_range(0.7, 1.4)
+
+		var basis := Basis().scaled(Vector3.ONE * s)
+		var origin := Vector3(x_dist, tree_mesh.height * 0.5 * s, dz)
+		trees.set_instance_transform(i, Transform3D(basis, origin))
+
+		var g: float = rng.randf_range(0.30, 0.50)
+		trees.set_instance_color(i, Color(0.10, g, 0.12))
+
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = trees
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color.WHITE
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.9
+	inst.material_override = mat
+	add_child(inst)
 
 
 func _setup_sun() -> void:
@@ -83,16 +231,48 @@ func _setup_rider() -> void:
 	rider_node.name = "Rider"
 	add_child(rider_node)
 
-	var mesh := MeshInstance3D.new()
-	var capsule := CapsuleMesh.new()
-	capsule.radius = 0.3
-	capsule.height = 1.7
-	mesh.mesh = capsule
-	mesh.position = Vector3(0.0, 0.85, 0.0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.85, 0.2, 0.15)
-	mesh.material_override = mat
-	rider_node.add_child(mesh)
+	# Body (jersey/torso) — narrower capsule than the Phase 1 placeholder.
+	var body := MeshInstance3D.new()
+	var body_mesh := CapsuleMesh.new()
+	body_mesh.radius = 0.18
+	body_mesh.height = 1.5
+	body.mesh = body_mesh
+	body.position = Vector3(0.0, 1.05, 0.0)
+	# Lean forward slightly to suggest aero position.
+	body.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.85, 0.2, 0.15)
+	body.material_override = body_mat
+	rider_node.add_child(body)
+
+	# Two wheels — shared mesh and material, rotated so their axis is along X.
+	var wheel_mesh := CylinderMesh.new()
+	wheel_mesh.height = 0.05
+	wheel_mesh.top_radius = 0.34
+	wheel_mesh.bottom_radius = 0.34
+	var wheel_mat := StandardMaterial3D.new()
+	wheel_mat.albedo_color = Color(0.08, 0.08, 0.08)
+	wheel_mat.roughness = 0.6
+
+	for z_offset in [-0.55, 0.55]:
+		var wheel := MeshInstance3D.new()
+		wheel.mesh = wheel_mesh
+		wheel.material_override = wheel_mat
+		wheel.position = Vector3(0.0, 0.34, z_offset)
+		wheel.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+		rider_node.add_child(wheel)
+
+	# Top tube connecting the wheels — thin horizontal cylinder.
+	var frame := MeshInstance3D.new()
+	var frame_mesh := CylinderMesh.new()
+	frame_mesh.height = 1.1
+	frame_mesh.top_radius = 0.04
+	frame_mesh.bottom_radius = 0.04
+	frame.mesh = frame_mesh
+	frame.material_override = body_mat
+	frame.position = Vector3(0.0, 0.55, 0.0)
+	frame.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	rider_node.add_child(frame)
 
 
 func _setup_camera() -> void:
@@ -161,6 +341,9 @@ func _input(event: InputEvent) -> void:
 			target_power_w = 0.0
 		elif event.keycode == KEY_ESCAPE:
 			_finish_ride()
+		elif event.keycode == KEY_T:
+			heading = -heading
+			rider_node.rotation.y = 0.0 if heading == 1 else PI
 
 
 func _process(delta: float) -> void:
@@ -185,7 +368,22 @@ func _physics_process(delta: float) -> void:
 	distance_m += velocity_mps * delta
 	elapsed_s += delta
 
-	rider_node.position.z = -distance_m
+	# Lateral steering input (rider's local frame: +X is rider's right).
+	var local_dx := 0.0
+	if Input.is_key_pressed(KEY_LEFT):
+		local_dx -= LATERAL_SPEED_MPS * delta
+	if Input.is_key_pressed(KEY_RIGHT):
+		local_dx += LATERAL_SPEED_MPS * delta
+
+	# Forward = local -Z; rider_node's rotation handles turn-around.
+	rider_node.translate(Vector3(local_dx, 0.0, -velocity_mps * delta))
+
+	# Soft clamp: keep the rider on the road (road runs along world Z).
+	var world_x := rider_node.global_position.x
+	if world_x > ROAD_HALF_WIDTH_M:
+		rider_node.global_position.x = ROAD_HALF_WIDTH_M
+	elif world_x < -ROAD_HALF_WIDTH_M:
+		rider_node.global_position.x = -ROAD_HALF_WIDTH_M
 
 	_sample_accum_s += delta
 	var sample_dt := 1.0 / SAMPLE_HZ
