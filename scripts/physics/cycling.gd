@@ -15,12 +15,13 @@ static func step_velocity(
 	gradient: float,
 	kit: PhysicsKit,
 	dt_s: float,
+	draft_multiplier: float = 1.0,
 ) -> float:
 	if dt_s <= 0.0:
 		return velocity_mps
 
 	var m: float = kit.total_mass_kg()
-	var cda: float = kit.total_cda_m2()
+	var cda: float = kit.total_cda_m2() * draft_multiplier
 	var crr: float = kit.effective_crr()
 	var g: float = kit.settings.gravity_mps2
 	var rho: float = kit.settings.air_density_kgpm3

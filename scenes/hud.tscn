@@ -24,8 +24,16 @@ theme_override_font_sizes/font_size = 24
 text = "Distance: 0 m"
 theme_override_font_sizes/font_size = 24
 
+[node name="GradeLabel" type="Label" parent="VBox"]
+text = "Grade: +0.0%"
+theme_override_font_sizes/font_size = 24
+
 [node name="TimeLabel" type="Label" parent="VBox"]
 text = "Time: 0:00"
+theme_override_font_sizes/font_size = 24
+
+[node name="DraftLabel" type="Label" parent="VBox"]
+text = "Draft: 0%"
 theme_override_font_sizes/font_size = 24
 
 [node name="CourseLabel" type="Label" parent="VBox"]

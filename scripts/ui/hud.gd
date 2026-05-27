@@ -3,7 +3,9 @@ extends CanvasLayer
 @onready var power_label: Label = $VBox/PowerLabel
 @onready var speed_label: Label = $VBox/SpeedLabel
 @onready var distance_label: Label = $VBox/DistanceLabel
+@onready var grade_label: Label = $VBox/GradeLabel
 @onready var time_label: Label = $VBox/TimeLabel
+@onready var draft_label: Label = $VBox/DraftLabel
 @onready var course_label: Label = $VBox/CourseLabel
 @onready var status_label: Label = $VBox/StatusLabel
 
@@ -23,11 +25,24 @@ func set_distance(m: float) -> void:
 		distance_label.text = "Distance: %d m" % int(m)
 
 
+func set_grade(percent: float) -> void:
+	grade_label.text = "Grade: %+.1f%%" % percent
+
+
 func set_elapsed(s: float) -> void:
 	var total: int = int(s)
 	var minutes: int = total / 60
 	var seconds: int = total % 60
 	time_label.text = "Time: %d:%02d" % [minutes, seconds]
+
+
+func set_draft(savings_pct: int) -> void:
+	draft_label.text = "Draft: %d%%" % savings_pct
+	# Tint cyan when actively drafting, white otherwise.
+	if savings_pct > 0:
+		draft_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0))
+	else:
+		draft_label.remove_theme_color_override("font_color")
 
 
 func set_course(name: String, length_m: float) -> void:

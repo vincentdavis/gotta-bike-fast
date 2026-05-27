@@ -16,6 +16,9 @@ const SAMPLE_FLUSH_S := 5.0
 const WORLD_STATE_HZ := 10.0  # outbound multiplayer state rate
 const PLAYER_COLOR := Color(0.85, 0.20, 0.15)
 const GHOST_COLOR := Color(0.15, 0.40, 0.85)
+const DRAFT_MAX_DISTANCE_M := 10.0
+const DRAFT_MAX_LATERAL_M := 2.0
+const DRAFT_FULL_REDUCTION := 0.35  # max CdA savings at perfect draft
 
 var rider_node: Node3D
 var camera: Camera3D
@@ -39,7 +42,13 @@ var _sample_accum_s: float = 0.0
 var _flush_accum_s: float = 0.0
 
 var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
+var _ghost_targets: Dictionary = {}  # rider_id -> {pos, velocity, yaw, t_ms}
 var _world_state_accum_s: float = 0.0
+
+const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
+const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
+
+signal _course_picked(course: Dictionary)
 
 
 func _ready() -> void:
@@ -316,9 +325,10 @@ func _start_session() -> void:
 		hud.set_status("No courses available")
 		return
 
-	var first: Dictionary = courses[0]
-	hud.set_status("Loading %s…" % first["name"])
-	var detail: Dictionary = await ApiClient.get_course(str(first["id"]))
+	hud.set_status("")
+	var chosen: Dictionary = await _pick_course(courses)
+	hud.set_status("Loading %s…" % chosen["name"])
+	var detail: Dictionary = await ApiClient.get_course(str(chosen["id"]))
 	if detail.is_empty():
 		hud.set_status("Failed to load course")
 		return
@@ -350,6 +360,57 @@ func _start_session() -> void:
 		hud.set_status("")
 
 
+# --- Course picker ---
+
+func _pick_course(courses: Array) -> Dictionary:
+	var canvas := CanvasLayer.new()
+	add_child(canvas)
+
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.65)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(bg)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(center)
+
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	margin.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Choose a course"
+	title.add_theme_font_size_override("font_size", 28)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	for c in courses:
+		var btn := Button.new()
+		var name: String = str(c.get("name", "Unnamed"))
+		var length_km: float = float(c.get("length_m", 0.0)) / 1000.0
+		btn.text = "%s · %.1f km" % [name, length_km]
+		btn.add_theme_font_size_override("font_size", 22)
+		btn.custom_minimum_size = Vector2(340, 0)
+		var captured: Dictionary = c
+		btn.pressed.connect(func() -> void: _course_picked.emit(captured))
+		vbox.add_child(btn)
+
+	var picked: Dictionary = await _course_picked
+	canvas.queue_free()
+	return picked
+
+
 # --- Input ---
 
 func _input(event: InputEvent) -> void:
@@ -366,6 +427,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	_update_ghost_visuals(delta)
 	if not is_riding:
 		return
 	if Input.is_key_pressed(KEY_UP):
@@ -381,8 +443,9 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var gradient := _gradient_at_distance(distance_m)
+	var draft_mult := _compute_draft_multiplier()
 	velocity_mps = CyclingPhysics.step_velocity(
-		target_power_w, velocity_mps, gradient, kit, delta
+		target_power_w, velocity_mps, gradient, kit, delta, draft_mult
 	)
 	distance_m += velocity_mps * delta
 	elapsed_s += delta
@@ -441,7 +504,40 @@ func _physics_process(delta: float) -> void:
 	hud.set_power(target_power_w)
 	hud.set_speed(velocity_mps)
 	hud.set_distance(distance_m)
+	hud.set_grade(gradient * 100.0)
 	hud.set_elapsed(elapsed_s)
+	hud.set_draft(int(round((1.0 - draft_mult) * 100.0)))
+
+
+# --- Drafting ---
+
+func _compute_draft_multiplier() -> float:
+	if _ghosts.is_empty():
+		return 1.0
+
+	# Direction "forward" in world Z based on heading.
+	var forward_z: float = -1.0 if heading == 1 else 1.0
+	var my_pos := rider_node.global_position
+	var best_savings := 0.0
+
+	for rid in _ghosts:
+		var ghost: Node3D = _ghosts[rid]
+		var ghost_pos := ghost.global_position
+		# How far ahead (positive = ahead, negative = behind).
+		var dz := (ghost_pos.z - my_pos.z) * forward_z
+		if dz <= 0.0 or dz > DRAFT_MAX_DISTANCE_M:
+			continue
+		var dx := absf(ghost_pos.x - my_pos.x)
+		if dx > DRAFT_MAX_LATERAL_M:
+			continue
+		var distance_factor := 1.0 - dz / DRAFT_MAX_DISTANCE_M
+		var lateral_factor := 1.0 - dx / DRAFT_MAX_LATERAL_M
+		var savings := distance_factor * lateral_factor
+		if savings > best_savings:
+			best_savings = savings
+
+	var global_factor: float = kit.settings.draft_strength_factor
+	return 1.0 - best_savings * DRAFT_FULL_REDUCTION * global_factor
 
 
 # --- Course profile lookup (gradient at distance, looping) ---
@@ -524,7 +620,7 @@ func _on_welcome(riders: Array) -> void:
 		_spawn_ghost(rid)
 		var state = r.get("state", {})
 		if state is Dictionary and not state.is_empty():
-			_apply_ghost_state(rid, state)
+			_record_ghost_state(rid, state, true)
 
 
 func _on_rider_joined(rider_id: String, _display_name: String) -> void:
@@ -534,17 +630,20 @@ func _on_rider_joined(rider_id: String, _display_name: String) -> void:
 
 
 func _on_rider_left(rider_id: String) -> void:
-	if not _ghosts.has(rider_id):
-		return
-	var node: Node3D = _ghosts[rider_id]
-	node.queue_free()
-	_ghosts.erase(rider_id)
+	if _ghosts.has(rider_id):
+		_ghosts[rider_id].queue_free()
+		_ghosts.erase(rider_id)
+	_ghost_targets.erase(rider_id)
 
 
 func _on_rider_state(rider_id: String, state: Dictionary) -> void:
 	if not _ghosts.has(rider_id):
 		_spawn_ghost(rider_id)
-	_apply_ghost_state(rider_id, state)
+	# First state for this ghost: snap into place (avoids a visible slide
+	# from world origin). Subsequent states only update the target; _process
+	# lerps the visual node toward it.
+	var snap := not _ghost_targets.has(rider_id)
+	_record_ghost_state(rider_id, state, snap)
 
 
 func _spawn_ghost(rider_id: String) -> void:
@@ -557,14 +656,37 @@ func _spawn_ghost(rider_id: String) -> void:
 	_ghosts[rider_id] = ghost
 
 
-func _apply_ghost_state(rider_id: String, state: Dictionary) -> void:
+func _record_ghost_state(rider_id: String, state: Dictionary, snap: bool) -> void:
 	if not _ghosts.has(rider_id):
 		return
-	var ghost: Node3D = _ghosts[rider_id]
-	ghost.global_position = Vector3(
-		float(state.get("x", 0.0)),
-		0.0,
-		float(state.get("z", 0.0)),
-	)
-	var ghost_heading := int(state.get("heading", 1))
-	ghost.rotation.y = 0.0 if ghost_heading == 1 else PI
+	var pos := Vector3(float(state.get("x", 0.0)), 0.0, float(state.get("z", 0.0)))
+	var h: int = int(state.get("heading", 1))
+	var speed: float = float(state.get("speed_mps", 0.0))
+	var velocity := Vector3(0.0, 0.0, speed * (-1.0 if h == 1 else 1.0))
+	var yaw: float = 0.0 if h == 1 else PI
+	_ghost_targets[rider_id] = {
+		"pos": pos,
+		"velocity": velocity,
+		"yaw": yaw,
+		"t_ms": Time.get_ticks_msec(),
+	}
+	if snap:
+		var ghost: Node3D = _ghosts[rider_id]
+		ghost.global_position = pos
+		ghost.rotation.y = yaw
+
+
+func _update_ghost_visuals(delta: float) -> void:
+	if _ghost_targets.is_empty():
+		return
+	var now_ms: int = Time.get_ticks_msec()
+	var smoothing: float = clampf(GHOST_SMOOTH_RATE * delta, 0.0, 1.0)
+	for rid in _ghost_targets:
+		if not _ghosts.has(rid):
+			continue
+		var ghost: Node3D = _ghosts[rid]
+		var t: Dictionary = _ghost_targets[rid]
+		var elapsed: float = minf(float(now_ms - int(t["t_ms"])) / 1000.0, GHOST_DEAD_RECKON_CAP_S)
+		var predicted_pos: Vector3 = t["pos"] + t["velocity"] * elapsed
+		ghost.global_position = ghost.global_position.lerp(predicted_pos, smoothing)
+		ghost.rotation.y = lerp_angle(ghost.rotation.y, t["yaw"], smoothing)
