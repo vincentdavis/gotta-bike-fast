@@ -1,0 +1,41 @@
+[gd_scene format=3 load_steps=2]
+
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="1_hud"]
+
+[node name="HUD" type="CanvasLayer"]
+script = ExtResource("1_hud")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 420.0
+offset_bottom = 260.0
+theme_override_constants/separation = 4
+
+[node name="PowerLabel" type="Label" parent="VBox"]
+text = "Power: 0 W"
+theme_override_font_sizes/font_size = 24
+
+[node name="SpeedLabel" type="Label" parent="VBox"]
+text = "Speed: 0.0 km/h"
+theme_override_font_sizes/font_size = 24
+
+[node name="DistanceLabel" type="Label" parent="VBox"]
+text = "Distance: 0 m"
+theme_override_font_sizes/font_size = 24
+
+[node name="TimeLabel" type="Label" parent="VBox"]
+text = "Time: 0:00"
+theme_override_font_sizes/font_size = 24
+
+[node name="CourseLabel" type="Label" parent="VBox"]
+text = ""
+theme_override_font_sizes/font_size = 18
+
+[node name="HintLabel" type="Label" parent="VBox"]
+text = "↑/↓ power · Space coast · Esc finish"
+theme_override_font_sizes/font_size = 16
+
+[node name="StatusLabel" type="Label" parent="VBox"]
+text = ""
+theme_override_font_sizes/font_size = 18
