@@ -13,6 +13,9 @@ const LATERAL_SPEED_MPS := 3.0
 const ROAD_HALF_WIDTH_M := 2.0  # soft clamp so the rider stays on the road
 const SAMPLE_HZ := 4.0
 const SAMPLE_FLUSH_S := 5.0
+const WORLD_STATE_HZ := 10.0  # outbound multiplayer state rate
+const PLAYER_COLOR := Color(0.85, 0.20, 0.15)
+const GHOST_COLOR := Color(0.15, 0.40, 0.85)
 
 var rider_node: Node3D
 var camera: Camera3D
@@ -34,6 +37,9 @@ var heading: int = 1  # +1 = facing -Z, -1 = turned around (facing +Z)
 var _samples_buffer: Array = []
 var _sample_accum_s: float = 0.0
 var _flush_accum_s: float = 0.0
+
+var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
+var _world_state_accum_s: float = 0.0
 
 
 func _ready() -> void:
@@ -230,22 +236,26 @@ func _setup_rider() -> void:
 	rider_node = Node3D.new()
 	rider_node.name = "Rider"
 	add_child(rider_node)
+	rider_node.add_child(_build_rider_visual(PLAYER_COLOR))
 
-	# Body (jersey/torso) — narrower capsule than the Phase 1 placeholder.
+
+func _build_rider_visual(albedo: Color) -> Node3D:
+	# Builds a rider-on-bike composite. Used for the local player and for
+	# remote ghost riders (with a different colour).
+	var root := Node3D.new()
+
 	var body := MeshInstance3D.new()
 	var body_mesh := CapsuleMesh.new()
 	body_mesh.radius = 0.18
 	body_mesh.height = 1.5
 	body.mesh = body_mesh
 	body.position = Vector3(0.0, 1.05, 0.0)
-	# Lean forward slightly to suggest aero position.
 	body.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
 	var body_mat := StandardMaterial3D.new()
-	body_mat.albedo_color = Color(0.85, 0.2, 0.15)
+	body_mat.albedo_color = albedo
 	body.material_override = body_mat
-	rider_node.add_child(body)
+	root.add_child(body)
 
-	# Two wheels — shared mesh and material, rotated so their axis is along X.
 	var wheel_mesh := CylinderMesh.new()
 	wheel_mesh.height = 0.05
 	wheel_mesh.top_radius = 0.34
@@ -260,9 +270,8 @@ func _setup_rider() -> void:
 		wheel.material_override = wheel_mat
 		wheel.position = Vector3(0.0, 0.34, z_offset)
 		wheel.rotation_degrees = Vector3(0.0, 0.0, 90.0)
-		rider_node.add_child(wheel)
+		root.add_child(wheel)
 
-	# Top tube connecting the wheels — thin horizontal cylinder.
 	var frame := MeshInstance3D.new()
 	var frame_mesh := CylinderMesh.new()
 	frame_mesh.height = 1.1
@@ -272,7 +281,9 @@ func _setup_rider() -> void:
 	frame.material_override = body_mat
 	frame.position = Vector3(0.0, 0.55, 0.0)
 	frame.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	rider_node.add_child(frame)
+	root.add_child(frame)
+
+	return root
 
 
 func _setup_camera() -> void:
@@ -325,6 +336,14 @@ func _start_session() -> void:
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	hud.set_status("Go!")
+
+	# Multiplayer: connect to the course's world session. The ride still
+	# works locally if the WS connect fails — ghosts simply won't appear.
+	WorldClient.welcome.connect(_on_welcome)
+	WorldClient.rider_joined.connect(_on_rider_joined)
+	WorldClient.rider_left.connect(_on_rider_left)
+	WorldClient.rider_state.connect(_on_rider_state)
+	WorldClient.connect_to_course(str(detail["id"]), rider_id)
 
 	await get_tree().create_timer(1.5).timeout
 	if is_riding:
@@ -403,6 +422,22 @@ func _physics_process(delta: float) -> void:
 		_flush_accum_s = 0.0
 		_flush_samples()
 
+	# Stream our world state to the WS server at WORLD_STATE_HZ.
+	_world_state_accum_s += delta
+	var world_dt := 1.0 / WORLD_STATE_HZ
+	if _world_state_accum_s >= world_dt:
+		_world_state_accum_s -= world_dt
+		var pos := rider_node.global_position
+		WorldClient.send_state(
+			{
+				"x": pos.x,
+				"z": pos.z,
+				"heading": heading,
+				"speed_mps": velocity_mps,
+				"power_w": target_power_w,
+			}
+		)
+
 	hud.set_power(target_power_w)
 	hud.set_speed(velocity_mps)
 	hud.set_distance(distance_m)
@@ -453,6 +488,7 @@ func _finish_ride() -> void:
 		return
 	_finishing = true
 	is_riding = false
+	WorldClient.disconnect_now()
 	hud.set_status("Finishing ride…")
 
 	if not _samples_buffer.is_empty():
@@ -476,3 +512,59 @@ func _finish_ride() -> void:
 			% [dist_km, int(time_s) / 60, int(time_s) % 60, avg_w, max_w]
 		)
 	)
+
+
+# --- Multiplayer ghosts ---
+
+func _on_welcome(riders: Array) -> void:
+	for r in riders:
+		var rid: String = str(r.get("rider_id", ""))
+		if rid.is_empty():
+			continue
+		_spawn_ghost(rid)
+		var state = r.get("state", {})
+		if state is Dictionary and not state.is_empty():
+			_apply_ghost_state(rid, state)
+
+
+func _on_rider_joined(rider_id: String, _display_name: String) -> void:
+	if rider_id.is_empty():
+		return
+	_spawn_ghost(rider_id)
+
+
+func _on_rider_left(rider_id: String) -> void:
+	if not _ghosts.has(rider_id):
+		return
+	var node: Node3D = _ghosts[rider_id]
+	node.queue_free()
+	_ghosts.erase(rider_id)
+
+
+func _on_rider_state(rider_id: String, state: Dictionary) -> void:
+	if not _ghosts.has(rider_id):
+		_spawn_ghost(rider_id)
+	_apply_ghost_state(rider_id, state)
+
+
+func _spawn_ghost(rider_id: String) -> void:
+	if _ghosts.has(rider_id):
+		return
+	var ghost := Node3D.new()
+	ghost.name = "Ghost_%s" % rider_id
+	ghost.add_child(_build_rider_visual(GHOST_COLOR))
+	add_child(ghost)
+	_ghosts[rider_id] = ghost
+
+
+func _apply_ghost_state(rider_id: String, state: Dictionary) -> void:
+	if not _ghosts.has(rider_id):
+		return
+	var ghost: Node3D = _ghosts[rider_id]
+	ghost.global_position = Vector3(
+		float(state.get("x", 0.0)),
+		0.0,
+		float(state.get("z", 0.0)),
+	)
+	var ghost_heading := int(state.get("heading", 1))
+	ghost.rotation.y = 0.0 if ghost_heading == 1 else PI
