@@ -44,6 +44,7 @@ var _flush_accum_s: float = 0.0
 var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
 var _ghost_targets: Dictionary = {}  # rider_id -> {pos, velocity, yaw, t_ms}
 var _world_state_accum_s: float = 0.0
+var _course_elevations: Array = []  # cumulative elevation at each waypoint
 
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
@@ -54,13 +55,12 @@ signal _course_picked(course: Dictionary)
 func _ready() -> void:
 	_setup_environment()
 	_setup_ground()
-	_setup_road()
-	_setup_markers()
-	_setup_scenery()
 	_setup_sun()
 	_setup_rider()
 	_setup_camera()
 	_setup_hud()
+	# Road, markers, scenery depend on the chosen course — built post-pick
+	# inside _start_session via _build_course_visuals().
 	_start_session()
 
 
@@ -108,31 +108,133 @@ func _setup_ground() -> void:
 	add_child(ground)
 
 
+func _build_course_visuals() -> void:
+	# Course-dependent visuals: road geometry, markers, and trees all use the
+	# elevation profile. Called after _start_session has picked a course.
+	_compute_course_elevations()
+	_setup_ground_strip()
+	_setup_road()
+	_setup_markers()
+	_setup_scenery()
+
+
+func _setup_ground_strip() -> void:
+	# Wide ground bed that follows the road's elevation, so the road and
+	# trees don't appear to float above the flat backdrop. Same per-segment
+	# tilt as the road, just much wider.
+	const STRIP_WIDTH := 240.0
+	const STRIP_LENGTH := 20000.0
+	const SEGMENT_LENGTH := 5.0
+	const NUM_SEGMENTS := int(STRIP_LENGTH / SEGMENT_LENGTH)
+
+	var multi := MultiMesh.new()
+	multi.transform_format = MultiMesh.TRANSFORM_3D
+	multi.instance_count = NUM_SEGMENTS
+	var seg_mesh := PlaneMesh.new()
+	seg_mesh.size = Vector2(STRIP_WIDTH, SEGMENT_LENGTH)
+	multi.mesh = seg_mesh
+	for i in NUM_SEGMENTS:
+		var d_mid: float = float(i) * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5
+		var y_mid := _elevation_at_distance(d_mid)
+		var grade := _gradient_at_distance(d_mid)
+		var pitch := atan(grade)
+		var basis := Basis().rotated(Vector3.RIGHT, pitch)
+		var origin := Vector3(0.0, y_mid, -d_mid)
+		multi.set_instance_transform(i, Transform3D(basis, origin))
+
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = multi
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.34, 0.55, 0.28)
+	mat.roughness = 1.0
+	inst.material_override = mat
+	add_child(inst)
+
+
+func _compute_course_elevations() -> void:
+	_course_elevations = []
+	if current_course.is_empty():
+		return
+	var profile: Array = current_course.get("elevation_profile", [])
+	if profile.size() < 2:
+		return
+	_course_elevations.resize(profile.size())
+	_course_elevations[0] = 0.0
+	for i in range(1, profile.size()):
+		var p0: Dictionary = profile[i - 1]
+		var p1: Dictionary = profile[i]
+		var d0 := float(p0["distance_m"])
+		var d1 := float(p1["distance_m"])
+		var g0 := float(p0["gradient"])
+		var g1 := float(p1["gradient"])
+		var avg_g := (g0 + g1) * 0.5
+		_course_elevations[i] = _course_elevations[i - 1] + (d1 - d0) * avg_g
+
+
+func _elevation_at_distance(d: float) -> float:
+	if _course_elevations.is_empty() or current_course.is_empty():
+		return 0.0
+	var profile: Array = current_course.get("elevation_profile", [])
+	if profile.size() < 2:
+		return 0.0
+	var length := float(current_course.get("length_m", 0.0))
+	if length > 0.0:
+		d = fposmod(d, length)
+	for i in range(profile.size() - 1):
+		var p0: Dictionary = profile[i]
+		var p1: Dictionary = profile[i + 1]
+		var d0 := float(p0["distance_m"])
+		var d1 := float(p1["distance_m"])
+		if d >= d0 and d <= d1:
+			if d1 <= d0:
+				return float(_course_elevations[i])
+			var g0 := float(p0["gradient"])
+			var g1 := float(p1["gradient"])
+			var t := (d - d0) / (d1 - d0)
+			var g_at_d := lerpf(g0, g1, t)
+			var avg := (g0 + g_at_d) * 0.5
+			return float(_course_elevations[i]) + (d - d0) * avg
+	return 0.0
+
+
 func _setup_road() -> void:
 	const ROAD_WIDTH := 4.0
 	const ROAD_LENGTH := 20000.0
+	const SEGMENT_LENGTH := 5.0
+	const NUM_SEGMENTS := int(ROAD_LENGTH / SEGMENT_LENGTH)
+	const DASH_LENGTH := 3.0
+	const DASH_PERIOD := 8.0
+	const DASH_COVERAGE := 10000.0
 	const LINE_WIDTH := 0.15
 
-	# Asphalt strip down the middle of the field, slightly raised to avoid
-	# z-fighting with the ground. Centered on the rider's path (-Z forward).
-	var road := MeshInstance3D.new()
+	# Asphalt: short plane segments, each pitched to match the local gradient,
+	# stacked from y = elevation_at_distance(midpoint). Single MultiMesh =
+	# one draw call.
+	var road_multi := MultiMesh.new()
+	road_multi.transform_format = MultiMesh.TRANSFORM_3D
+	road_multi.instance_count = NUM_SEGMENTS
 	var road_mesh := PlaneMesh.new()
-	road_mesh.size = Vector2(ROAD_WIDTH, ROAD_LENGTH)
-	road.mesh = road_mesh
+	road_mesh.size = Vector2(ROAD_WIDTH, SEGMENT_LENGTH)
+	road_multi.mesh = road_mesh
+	for i in NUM_SEGMENTS:
+		var d_mid: float = float(i) * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5
+		var y_mid := _elevation_at_distance(d_mid)
+		var grade := _gradient_at_distance(d_mid)
+		var pitch := atan(grade)
+		var basis := Basis().rotated(Vector3.RIGHT, pitch)
+		var origin := Vector3(0.0, y_mid + 0.01, -d_mid)
+		road_multi.set_instance_transform(i, Transform3D(basis, origin))
+
+	var road_inst := MultiMeshInstance3D.new()
+	road_inst.multimesh = road_multi
 	var road_mat := StandardMaterial3D.new()
 	road_mat.albedo_color = Color(0.18, 0.18, 0.20)
 	road_mat.roughness = 0.85
-	road.material_override = road_mat
-	road.position = Vector3(0.0, 0.01, -ROAD_LENGTH * 0.5 + 100.0)
-	add_child(road)
+	road_inst.material_override = road_mat
+	add_child(road_inst)
 
-	# Dashed center line via MultiMesh — one draw call for all dashes.
-	const DASH_LENGTH := 3.0
-	const DASH_GAP := 5.0
-	const DASH_COVERAGE := 10000.0  # length of road that gets dashes
-	var dash_period := DASH_LENGTH + DASH_GAP
-	var num_dashes := int(DASH_COVERAGE / dash_period)
-
+	# Dashed center line — same treatment, slightly above the asphalt.
+	var num_dashes := int(DASH_COVERAGE / DASH_PERIOD)
 	var dashes := MultiMesh.new()
 	dashes.transform_format = MultiMesh.TRANSFORM_3D
 	dashes.instance_count = num_dashes
@@ -140,10 +242,13 @@ func _setup_road() -> void:
 	dash_mesh.size = Vector2(LINE_WIDTH, DASH_LENGTH)
 	dashes.mesh = dash_mesh
 	for i in num_dashes:
-		var dz := -(i * dash_period + DASH_LENGTH * 0.5)
-		var t := Transform3D.IDENTITY
-		t.origin = Vector3(0.0, 0.02, dz)
-		dashes.set_instance_transform(i, t)
+		var d_mid: float = float(i) * DASH_PERIOD + DASH_LENGTH * 0.5
+		var y_mid := _elevation_at_distance(d_mid)
+		var grade := _gradient_at_distance(d_mid)
+		var pitch := atan(grade)
+		var basis := Basis().rotated(Vector3.RIGHT, pitch)
+		var origin := Vector3(0.0, y_mid + 0.02, -d_mid)
+		dashes.set_instance_transform(i, Transform3D(basis, origin))
 
 	var dashes_inst := MultiMeshInstance3D.new()
 	dashes_inst.multimesh = dashes
@@ -158,7 +263,6 @@ func _setup_markers() -> void:
 	const SPACING_M := 100.0
 	const SIDE_OFFSET := 3.2
 
-	# One shared mesh + material per marker style — Godot will batch instances.
 	var post_mesh := CylinderMesh.new()
 	post_mesh.height = 1.4
 	post_mesh.top_radius = 0.08
@@ -177,20 +281,23 @@ func _setup_markers() -> void:
 
 	for i in range(1, MARKER_COUNT + 1):
 		var distance := i * SPACING_M
+		var elev := _elevation_at_distance(distance)
 		var is_km := (i % 10) == 0
 		for side in [-1.0, 1.0]:
 			var post := MeshInstance3D.new()
 			post.mesh = km_mesh if is_km else post_mesh
 			post.material_override = km_mat if is_km else post_mat
 			var height := (km_mesh.height if is_km else post_mesh.height) as float
-			post.position = Vector3(side * SIDE_OFFSET, height * 0.5, -distance)
+			post.position = Vector3(side * SIDE_OFFSET, elev + height * 0.5, -distance)
 			add_child(post)
 
 
 func _setup_scenery() -> void:
 	# Trees: cone meshes scattered randomly beside the road. Single MultiMesh
-	# instance so all trees share one draw call. Per-instance color varies the
-	# greens slightly. Seed is fixed so the layout is reproducible.
+	# instance so all trees share one draw call. Per-instance color varies
+	# the greens slightly. Seed is fixed so the layout is reproducible.
+	# Y matches the road elevation so trees plant on the hillside, not under
+	# or above the road as it rises.
 	const TREE_COUNT := 250
 	const MIN_SIDE_DIST := 6.0
 	const MAX_SIDE_DIST := 60.0
@@ -213,11 +320,12 @@ func _setup_scenery() -> void:
 	for i in TREE_COUNT:
 		var side: float = -1.0 if rng.randf() < 0.5 else 1.0
 		var x_dist: float = rng.randf_range(MIN_SIDE_DIST, MAX_SIDE_DIST) * side
-		var dz: float = -rng.randf_range(20.0, Z_COVERAGE)
+		var distance: float = rng.randf_range(20.0, Z_COVERAGE)
 		var s: float = rng.randf_range(0.7, 1.4)
+		var elev := _elevation_at_distance(distance)
 
 		var basis := Basis().scaled(Vector3.ONE * s)
-		var origin := Vector3(x_dist, tree_mesh.height * 0.5 * s, dz)
+		var origin := Vector3(x_dist, elev + tree_mesh.height * 0.5 * s, -distance)
 		trees.set_instance_transform(i, Transform3D(basis, origin))
 
 		var g: float = rng.randf_range(0.30, 0.50)
@@ -335,6 +443,7 @@ func _start_session() -> void:
 
 	current_course = detail
 	hud.set_course(detail["name"], float(detail["length_m"]))
+	_build_course_visuals()
 
 	hud.set_status("Starting ride…")
 	var ride: Dictionary = await ApiClient.start_ride(rider_id, str(detail["id"]))
@@ -442,7 +551,13 @@ func _physics_process(delta: float) -> void:
 	if not is_riding:
 		return
 
-	var gradient := _gradient_at_distance(distance_m)
+	# Course position is derived from the rider's world Z (start = 0, forward
+	# travel makes Z negative). The raw gradient is signed by course
+	# direction; flip when the rider has turned around so going "backwards
+	# up the hill" reads as a descent.
+	var course_pos := -rider_node.global_position.z
+	var raw_grade := _gradient_at_distance(course_pos)
+	var gradient := raw_grade * float(heading)
 	var draft_mult := _compute_draft_multiplier()
 	velocity_mps = CyclingPhysics.step_velocity(
 		target_power_w, velocity_mps, gradient, kit, delta, draft_mult
@@ -466,6 +581,9 @@ func _physics_process(delta: float) -> void:
 		rider_node.global_position.x = ROAD_HALF_WIDTH_M
 	elif world_x < -ROAD_HALF_WIDTH_M:
 		rider_node.global_position.x = -ROAD_HALF_WIDTH_M
+
+	# Plant the rider on the road surface.
+	rider_node.global_position.y = _elevation_at_distance(course_pos)
 
 	_sample_accum_s += delta
 	var sample_dt := 1.0 / SAMPLE_HZ
@@ -562,7 +680,7 @@ func _gradient_at_distance(d: float) -> float:
 			if d1 <= d0:
 				return float(p0["gradient"])
 			var t := (d - d0) / (d1 - d0)
-			return lerp(float(p0["gradient"]), float(p1["gradient"]), t)
+			return lerpf(float(p0["gradient"]), float(p1["gradient"]), t)
 	return 0.0
 
 
@@ -672,7 +790,7 @@ func _record_ghost_state(rider_id: String, state: Dictionary, snap: bool) -> voi
 	}
 	if snap:
 		var ghost: Node3D = _ghosts[rider_id]
-		ghost.global_position = pos
+		ghost.global_position = Vector3(pos.x, _elevation_at_distance(-pos.z), pos.z)
 		ghost.rotation.y = yaw
 
 
@@ -689,4 +807,6 @@ func _update_ghost_visuals(delta: float) -> void:
 		var elapsed: float = minf(float(now_ms - int(t["t_ms"])) / 1000.0, GHOST_DEAD_RECKON_CAP_S)
 		var predicted_pos: Vector3 = t["pos"] + t["velocity"] * elapsed
 		ghost.global_position = ghost.global_position.lerp(predicted_pos, smoothing)
+		# WS protocol doesn't carry Y; plant the ghost on the same road we render.
+		ghost.global_position.y = _elevation_at_distance(-ghost.global_position.z)
 		ghost.rotation.y = lerp_angle(ghost.rotation.y, t["yaw"], smoothing)
