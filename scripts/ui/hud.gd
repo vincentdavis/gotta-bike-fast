@@ -3,12 +3,14 @@ extends CanvasLayer
 @onready var power_label: Label = $VBox/PowerLabel
 @onready var speed_label: Label = $VBox/SpeedLabel
 @onready var distance_label: Label = $VBox/DistanceLabel
+@onready var lap_label: Label = $VBox/LapLabel
 @onready var grade_label: Label = $VBox/GradeLabel
 @onready var time_label: Label = $VBox/TimeLabel
 @onready var draft_label: Label = $VBox/DraftLabel
 @onready var course_label: Label = $VBox/CourseLabel
 @onready var status_label: Label = $VBox/StatusLabel
 @onready var countdown_label: Label = $CountdownLabel
+@onready var leaderboard_list: VBoxContainer = $LeaderboardPanel/Margin/VBox/List
 
 
 func set_power(w: float) -> void:
@@ -28,6 +30,10 @@ func set_distance(m: float) -> void:
 
 func set_grade(percent: float) -> void:
 	grade_label.text = "Grade: %+.1f%%" % percent
+
+
+func set_lap(lap: int) -> void:
+	lap_label.text = "Lap: %d" % lap
 
 
 func set_elapsed(s: float) -> void:
@@ -65,3 +71,22 @@ func show_countdown(seconds_remaining: float) -> void:
 
 func hide_countdown() -> void:
 	countdown_label.text = ""
+
+
+func set_leaderboard(entries: Array) -> void:
+	# entries: Array of {name, bib, distance_m, is_me}, sorted leader-first.
+	for child in leaderboard_list.get_children():
+		child.queue_free()
+	for i in entries.size():
+		var e: Dictionary = entries[i]
+		var dist_km: float = float(e.get("distance_m", 0.0)) / 1000.0
+		var name_str: String = str(e.get("name", "Rider"))
+		var bib: int = int(e.get("bib", 0))
+		var is_me: bool = bool(e.get("is_me", false))
+		var prefix: String = "#%d " % bib if bib > 0 else ""
+		var row := Label.new()
+		row.text = "%d. %s%s · %.2f km" % [i + 1, prefix, name_str, dist_km]
+		row.add_theme_font_size_override("font_size", 18)
+		if is_me:
+			row.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+		leaderboard_list.add_child(row)

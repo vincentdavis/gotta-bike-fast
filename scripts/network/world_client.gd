@@ -8,7 +8,7 @@ extends Node
 signal connected
 signal disconnected
 signal welcome(riders: Array)
-signal rider_joined(rider_id: String, display_name: String)
+signal rider_joined(rider_id: String, display_name: String, bib_number: int)
 signal rider_left(rider_id: String)
 signal rider_state(rider_id: String, state: Dictionary)
 signal lobby_update(participants: Array)
@@ -81,7 +81,11 @@ func _handle_message(text: String) -> void:
 		"welcome":
 			welcome.emit(parsed.get("riders", []))
 		"rider_joined":
-			rider_joined.emit(parsed.get("rider_id", ""), parsed.get("display_name", ""))
+			rider_joined.emit(
+				parsed.get("rider_id", ""),
+				parsed.get("display_name", ""),
+				int(parsed.get("bib_number", 0)),
+			)
 		"rider_left":
 			rider_left.emit(parsed.get("rider_id", ""))
 		"rider_state":

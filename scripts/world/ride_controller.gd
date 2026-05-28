@@ -36,6 +36,7 @@ var target_power_w: float = STARTING_POWER_W
 var velocity_mps: float = 0.0
 var distance_m: float = 0.0
 var elapsed_s: float = 0.0
+var peak_speed_mps: float = 0.0
 var heading: int = 1  # +1 = facing -Z, -1 = turned around (facing +Z)
 var _start_line_node: Node3D = null
 
@@ -45,6 +46,10 @@ var _flush_accum_s: float = 0.0
 
 var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
 var _ghost_targets: Dictionary = {}  # rider_id -> {pos, velocity, yaw, t_ms}
+var _ghost_names: Dictionary = {}  # rider_id -> display_name
+var _ghost_bibs: Dictionary = {}  # rider_id -> bib_number
+var _ghost_distances: Dictionary = {}  # rider_id -> latest reported distance_m
+var _my_bib: int = 0
 var _world_state_accum_s: float = 0.0
 var _course_elevations: Array = []  # cumulative elevation at each waypoint
 
@@ -361,48 +366,128 @@ func _setup_rider() -> void:
 
 
 func _build_rider_visual(albedo: Color) -> Node3D:
-	# Builds a rider-on-bike composite. Used for the local player and for
-	# remote ghost riders (with a different colour).
+	# Stylized cyclist on a bike. Primitive meshes only; for the real
+	# jersey graphic we'd need a UV-unwrapped humanoid model. The jersey
+	# uses `albedo` as the main colour and an orange chest accent.
 	var root := Node3D.new()
 
-	var body := MeshInstance3D.new()
-	var body_mesh := CapsuleMesh.new()
-	body_mesh.radius = 0.18
-	body_mesh.height = 1.5
-	body.mesh = body_mesh
-	body.position = Vector3(0.0, 1.05, 0.0)
-	body.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
-	var body_mat := StandardMaterial3D.new()
-	body_mat.albedo_color = albedo
-	body.material_override = body_mat
-	root.add_child(body)
+	var jersey := StandardMaterial3D.new()
+	jersey.albedo_color = albedo
+	var bibs := StandardMaterial3D.new()
+	bibs.albedo_color = Color(0.07, 0.07, 0.08)
+	var skin := StandardMaterial3D.new()
+	skin.albedo_color = Color(0.93, 0.78, 0.65)
+	var helmet_mat := StandardMaterial3D.new()
+	helmet_mat.albedo_color = Color(0.92, 0.92, 0.92)
+	helmet_mat.roughness = 0.4
+	var rubber := StandardMaterial3D.new()
+	rubber.albedo_color = Color(0.07, 0.07, 0.07)
+	rubber.roughness = 0.7
+	var accent_mat := StandardMaterial3D.new()
+	accent_mat.albedo_color = Color(0.95, 0.45, 0.15)
 
+	const LEAN_DEG := -28.0
+
+	# Torso (forward aero lean).
+	var torso := MeshInstance3D.new()
+	var torso_mesh := CapsuleMesh.new()
+	torso_mesh.radius = 0.18
+	torso_mesh.height = 0.80
+	torso.mesh = torso_mesh
+	torso.position = Vector3(0.0, 1.05, 0.0)
+	torso.rotation_degrees = Vector3(LEAN_DEG, 0.0, 0.0)
+	torso.material_override = jersey
+	root.add_child(torso)
+
+	# Orange chest stripe.
+	var stripe := MeshInstance3D.new()
+	var stripe_mesh := BoxMesh.new()
+	stripe_mesh.size = Vector3(0.36, 0.10, 0.04)
+	stripe.mesh = stripe_mesh
+	# Front-of-torso, upper, leaning with the rider.
+	stripe.position = Vector3(0.0, 1.28, -0.20)
+	stripe.rotation_degrees = Vector3(LEAN_DEG, 0.0, 0.0)
+	stripe.material_override = accent_mat
+	root.add_child(stripe)
+
+	# Head + helmet (also tilted with the lean).
+	var head := MeshInstance3D.new()
+	var head_mesh := SphereMesh.new()
+	head_mesh.radius = 0.12
+	head_mesh.height = 0.26
+	head.mesh = head_mesh
+	head.position = Vector3(0.0, 1.62, -0.30)
+	head.material_override = skin
+	root.add_child(head)
+
+	var helmet := MeshInstance3D.new()
+	var helmet_mesh := SphereMesh.new()
+	helmet_mesh.radius = 0.14
+	helmet_mesh.height = 0.20
+	helmet.mesh = helmet_mesh
+	helmet.position = Vector3(0.0, 1.70, -0.32)
+	helmet.material_override = helmet_mat
+	root.add_child(helmet)
+
+	# Arms reaching for the handlebars.
+	var arm_mesh := CapsuleMesh.new()
+	arm_mesh.radius = 0.055
+	arm_mesh.height = 0.55
+	for x_off in [-0.16, 0.16]:
+		var arm := MeshInstance3D.new()
+		arm.mesh = arm_mesh
+		arm.material_override = jersey
+		arm.position = Vector3(x_off, 1.18, -0.30)
+		arm.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		root.add_child(arm)
+
+	# Legs (bib shorts) — vertical, atop the bottom bracket.
+	var leg_mesh := CapsuleMesh.new()
+	leg_mesh.radius = 0.075
+	leg_mesh.height = 0.75
+	for x_off in [-0.09, 0.09]:
+		var leg := MeshInstance3D.new()
+		leg.mesh = leg_mesh
+		leg.material_override = bibs
+		leg.position = Vector3(x_off, 0.62, 0.05)
+		root.add_child(leg)
+
+	# Wheels.
 	var wheel_mesh := CylinderMesh.new()
 	wheel_mesh.height = 0.05
 	wheel_mesh.top_radius = 0.34
 	wheel_mesh.bottom_radius = 0.34
-	var wheel_mat := StandardMaterial3D.new()
-	wheel_mat.albedo_color = Color(0.08, 0.08, 0.08)
-	wheel_mat.roughness = 0.6
-
 	for z_offset in [-0.55, 0.55]:
 		var wheel := MeshInstance3D.new()
 		wheel.mesh = wheel_mesh
-		wheel.material_override = wheel_mat
+		wheel.material_override = rubber
 		wheel.position = Vector3(0.0, 0.34, z_offset)
 		wheel.rotation_degrees = Vector3(0.0, 0.0, 90.0)
 		root.add_child(wheel)
 
+	# Bike frame (top tube, painted to match jersey).
 	var frame := MeshInstance3D.new()
 	var frame_mesh := CylinderMesh.new()
-	frame_mesh.height = 1.1
-	frame_mesh.top_radius = 0.04
-	frame_mesh.bottom_radius = 0.04
+	frame_mesh.height = 1.05
+	frame_mesh.top_radius = 0.035
+	frame_mesh.bottom_radius = 0.035
 	frame.mesh = frame_mesh
-	frame.material_override = body_mat
-	frame.position = Vector3(0.0, 0.55, 0.0)
+	frame.material_override = jersey
+	frame.position = Vector3(0.0, 0.58, 0.0)
 	frame.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 	root.add_child(frame)
+
+	# Handlebars: a small horizontal bar at the front, dark.
+	var bars := MeshInstance3D.new()
+	var bars_mesh := CylinderMesh.new()
+	bars_mesh.height = 0.42
+	bars_mesh.top_radius = 0.018
+	bars_mesh.bottom_radius = 0.018
+	bars.mesh = bars_mesh
+	bars.material_override = bibs
+	bars.position = Vector3(0.0, 0.92, -0.50)
+	bars.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+	root.add_child(bars)
 
 	return root
 
@@ -485,11 +570,19 @@ func _start_game() -> void:
 	WorldClient.race_started.connect(_on_race_started)
 	WorldClient.race_ended.connect(_on_game_race_ended)
 
-	# Bootstrap ghosts from the participant list captured by the lobby.
+	# Bootstrap ghosts and bibs from the participant list captured by the lobby.
 	for p in GameSession.participants:
 		var rid := str(p.get("rider_id", ""))
-		if rid != "" and rid != rider_id:
-			_spawn_ghost(rid)
+		if rid == rider_id:
+			_my_bib = int(p.get("bib_number", 0))
+			continue
+		if rid == "":
+			continue
+		_spawn_ghost(
+			rid, str(p.get("display_name", "")), int(p.get("bib_number", 0))
+		)
+	if _my_bib > 0:
+		_add_bib_label(rider_node, _my_bib, PLAYER_COLOR)
 
 	hud.set_status("Starting ride…")
 	var ride: Dictionary = await ApiClient.start_ride(rider_id, str(detail["id"]))
@@ -604,6 +697,8 @@ func _physics_process(delta: float) -> void:
 		velocity_mps = CyclingPhysics.step_velocity(
 			target_power_w, velocity_mps, gradient, kit, delta, draft_mult
 		)
+		if velocity_mps > peak_speed_mps:
+			peak_speed_mps = velocity_mps
 		distance_m += velocity_mps * delta
 		elapsed_s += delta
 	else:
@@ -666,15 +761,20 @@ func _physics_process(delta: float) -> void:
 				"heading": heading,
 				"speed_mps": velocity_mps,
 				"power_w": target_power_w,
+				"distance_m": distance_m,
 			}
 		)
 
 	hud.set_power(target_power_w)
 	hud.set_speed(velocity_mps)
 	hud.set_distance(distance_m)
+	var course_length := float(current_course.get("length_m", 0.0))
+	if course_length > 0.0:
+		hud.set_lap(int(distance_m / course_length) + 1)
 	hud.set_grade(gradient * 100.0)
 	hud.set_elapsed(elapsed_s)
 	hud.set_draft(int(round((1.0 - draft_mult) * 100.0)))
+	hud.set_leaderboard(_build_leaderboard())
 
 	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
 		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
@@ -682,6 +782,31 @@ func _physics_process(delta: float) -> void:
 
 
 # --- Drafting ---
+
+func _build_leaderboard() -> Array:
+	var entries: Array = [
+		{
+			"name": "You",
+			"bib": _my_bib,
+			"distance_m": distance_m,
+			"is_me": true,
+		}
+	]
+	for rid in _ghosts:
+		entries.append(
+			{
+				"name": str(_ghost_names.get(rid, "Rider")),
+				"bib": int(_ghost_bibs.get(rid, 0)),
+				"distance_m": float(_ghost_distances.get(rid, 0.0)),
+				"is_me": false,
+			}
+		)
+	entries.sort_custom(
+		func(a: Dictionary, b: Dictionary) -> bool:
+			return float(a["distance_m"]) > float(b["distance_m"])
+	)
+	return entries
+
 
 func _compute_draft_multiplier() -> float:
 	if _ghosts.is_empty():
@@ -774,12 +899,79 @@ func _finish_ride() -> void:
 	var time_s := float(result.get("total_duration_s", 0.0))
 	var avg_w := int(round(float(result.get("avg_power_w", 0.0))))
 	var max_w := int(round(float(result.get("max_power_w", 0.0))))
-	hud.set_status(
-		(
-			"Done · %.2f km · %d:%02d · avg %d W · max %d W"
-			% [dist_km, int(time_s) / 60, int(time_s) % 60, avg_w, max_w]
-		)
+	hud.set_status("")
+	hud.hide_countdown()
+	_show_summary(dist_km, time_s, avg_w, max_w)
+
+
+func _show_summary(dist_km: float, time_s: float, avg_w: int, max_w: int) -> void:
+	var course_length := float(current_course.get("length_m", 0.0))
+	var laps: int = (
+		int(distance_m / course_length) + 1 if course_length > 0.0 else 1
 	)
+	var peak_kph := peak_speed_mps * 3.6
+
+	var canvas := CanvasLayer.new()
+	add_child(canvas)
+
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.7)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(bg)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(center)
+
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 36)
+	margin.add_theme_constant_override("margin_right", 36)
+	margin.add_theme_constant_override("margin_top", 28)
+	margin.add_theme_constant_override("margin_bottom", 28)
+	panel.add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	margin.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Ride Complete"
+	title.add_theme_font_size_override("font_size", 40)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var minutes: int = int(time_s) / 60
+	var seconds: int = int(time_s) % 60
+	for line in [
+		"Distance:    %.2f km" % dist_km,
+		"Time:           %d:%02d" % [minutes, seconds],
+		"Laps:           %d" % laps,
+		"Avg power: %d W" % avg_w,
+		"Max power: %d W" % max_w,
+		"Peak speed: %.1f km/h" % peak_kph,
+	]:
+		var l := Label.new()
+		l.text = line
+		l.add_theme_font_size_override("font_size", 22)
+		vbox.add_child(l)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 12)
+	vbox.add_child(spacer)
+
+	var btn := Button.new()
+	btn.text = "Back to Menu"
+	btn.add_theme_font_size_override("font_size", 22)
+	btn.custom_minimum_size = Vector2(280, 0)
+	btn.pressed.connect(
+		func() -> void:
+			GameSession.reset()
+			get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	)
+	vbox.add_child(btn)
 
 
 # --- Multiplayer ghosts ---
@@ -789,16 +981,18 @@ func _on_welcome(riders: Array) -> void:
 		var rid: String = str(r.get("rider_id", ""))
 		if rid.is_empty():
 			continue
-		_spawn_ghost(rid)
+		_spawn_ghost(
+			rid, str(r.get("display_name", "")), int(r.get("bib_number", 0))
+		)
 		var state = r.get("state", {})
 		if state is Dictionary and not state.is_empty():
 			_record_ghost_state(rid, state, true)
 
 
-func _on_rider_joined(rider_id: String, _display_name: String) -> void:
+func _on_rider_joined(rider_id: String, display_name: String, bib_number: int) -> void:
 	if rider_id.is_empty():
 		return
-	_spawn_ghost(rider_id)
+	_spawn_ghost(rider_id, display_name, bib_number)
 
 
 func _on_rider_left(rider_id: String) -> void:
@@ -806,11 +1000,14 @@ func _on_rider_left(rider_id: String) -> void:
 		_ghosts[rider_id].queue_free()
 		_ghosts.erase(rider_id)
 	_ghost_targets.erase(rider_id)
+	_ghost_names.erase(rider_id)
+	_ghost_bibs.erase(rider_id)
+	_ghost_distances.erase(rider_id)
 
 
 func _on_rider_state(rider_id: String, state: Dictionary) -> void:
 	if not _ghosts.has(rider_id):
-		_spawn_ghost(rider_id)
+		_spawn_ghost(rider_id, "", 0)
 	# First state for this ghost: snap into place (avoids a visible slide
 	# from world origin). Subsequent states only update the target; _process
 	# lerps the visual node toward it.
@@ -818,14 +1015,41 @@ func _on_rider_state(rider_id: String, state: Dictionary) -> void:
 	_record_ghost_state(rider_id, state, snap)
 
 
-func _spawn_ghost(rider_id: String) -> void:
+func _spawn_ghost(rider_id: String, display_name: String = "", bib: int = 0) -> void:
 	if _ghosts.has(rider_id):
+		# Already spawned — just update name/bib if newly provided.
+		if not display_name.is_empty():
+			_ghost_names[rider_id] = display_name
+		if bib > 0 and int(_ghost_bibs.get(rider_id, 0)) == 0:
+			_ghost_bibs[rider_id] = bib
+			_add_bib_label(_ghosts[rider_id], bib, GHOST_COLOR)
 		return
 	var ghost := Node3D.new()
 	ghost.name = "Ghost_%s" % rider_id
 	ghost.add_child(_build_rider_visual(GHOST_COLOR))
 	add_child(ghost)
 	_ghosts[rider_id] = ghost
+	if not display_name.is_empty():
+		_ghost_names[rider_id] = display_name
+	if bib > 0:
+		_ghost_bibs[rider_id] = bib
+		_add_bib_label(ghost, bib, GHOST_COLOR)
+
+
+func _add_bib_label(parent: Node3D, number: int, jersey: Color) -> void:
+	var label := Label3D.new()
+	label.text = "%d" % number
+	label.font_size = 64
+	label.outline_size = 12
+	label.modulate = Color.WHITE
+	label.outline_modulate = jersey.darkened(0.5)
+	# Sit on the upper back of the jersey. Label3D's front face is +Z by
+	# default, which is the side the chase camera lives on.
+	label.position = Vector3(0.0, 1.30, 0.22)
+	label.fixed_size = true
+	label.pixel_size = 0.00117  # was 0.0035, ~3× smaller
+	label.no_depth_test = true
+	parent.add_child(label)
 
 
 func _record_ghost_state(rider_id: String, state: Dictionary, snap: bool) -> void:
@@ -842,6 +1066,8 @@ func _record_ghost_state(rider_id: String, state: Dictionary, snap: bool) -> voi
 		"yaw": yaw,
 		"t_ms": Time.get_ticks_msec(),
 	}
+	if state.has("distance_m"):
+		_ghost_distances[rider_id] = float(state["distance_m"])
 	if snap:
 		var ghost: Node3D = _ghosts[rider_id]
 		ghost.global_position = Vector3(pos.x, _elevation_at_distance(-pos.z), pos.z)
