@@ -1,0 +1,109 @@
+[gd_scene format=3 load_steps=2]
+
+[ext_resource type="Script" path="res://scripts/ui/lobby.gd" id="1_lobby"]
+
+[node name="Lobby" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_lobby")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.08, 0.10, 0.14, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 60
+theme_override_constants/margin_right = 60
+theme_override_constants/margin_top = 36
+theme_override_constants/margin_bottom = 36
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Lobby"
+theme_override_font_sizes/font_size = 36
+
+[node name="CourseLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Course: …"
+theme_override_font_sizes/font_size = 22
+
+[node name="ScheduleLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = ""
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(1, 0.85, 0.4, 1)
+
+[node name="Spacer1" type="Control" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="ShareLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Share this link:"
+theme_override_font_sizes/font_size = 18
+
+[node name="ShareRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="ShareUrl" type="Label" parent="Margin/VBox/ShareRow"]
+layout_mode = 2
+text = "gbf://join/…"
+theme_override_font_sizes/font_size = 24
+size_flags_horizontal = 3
+
+[node name="CopyButton" type="Button" parent="Margin/VBox/ShareRow"]
+layout_mode = 2
+text = "Copy"
+theme_override_font_sizes/font_size = 18
+
+[node name="Spacer2" type="Control" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 12)
+layout_mode = 2
+
+[node name="RidersHeader" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Riders:"
+theme_override_font_sizes/font_size = 22
+
+[node name="Scroll" type="ScrollContainer" parent="Margin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="RidersList" type="VBoxContainer" parent="Margin/VBox/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="StatusLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = ""
+theme_override_font_sizes/font_size = 18
+
+[node name="ButtonRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="StartButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 0)
+text = "Start Race"
+theme_override_font_sizes/font_size = 22
+
+[node name="LeaveButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+text = "Leave"
+theme_override_font_sizes/font_size = 22

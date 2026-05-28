@@ -1,7 +1,9 @@
 extends Node
 
-# WebSocket client for the course-scoped world session. Emits signals
-# when other riders join, leave, or update their state. Polled in _process.
+# WebSocket client for the game-scoped world session. Emits signals when
+# other riders join, leave, or update their state, and for game lifecycle
+# events (lobby_update, countdown_started, race_started, race_ended).
+# Polled in _process.
 
 signal connected
 signal disconnected
@@ -9,6 +11,10 @@ signal welcome(riders: Array)
 signal rider_joined(rider_id: String, display_name: String)
 signal rider_left(rider_id: String)
 signal rider_state(rider_id: String, state: Dictionary)
+signal lobby_update(participants: Array)
+signal countdown_started(countdown_starts_at: String, race_starts_at: String)
+signal race_started
+signal race_ended(reason: String)
 
 const DEFAULT_WS_URL := "ws://127.0.0.1:8001"
 
@@ -18,12 +24,12 @@ var _peer: WebSocketPeer = null
 var _last_state: int = WebSocketPeer.STATE_CLOSED
 
 
-func connect_to_course(course_id: String, rider_id: String) -> void:
+func connect_to_game(code: String, rider_id: String) -> void:
 	if _peer != null:
 		_peer.close()
 		_peer = null
 	_peer = WebSocketPeer.new()
-	var url := "%s/ws/world/%s?rider_id=%s" % [ws_url, course_id, rider_id]
+	var url := "%s/ws/game/%s?rider_id=%s" % [ws_url, code, rider_id]
 	var err := _peer.connect_to_url(url)
 	if err != OK:
 		push_warning("WorldClient: connect failed err=%s url=%s" % [err, url])
@@ -80,3 +86,14 @@ func _handle_message(text: String) -> void:
 			rider_left.emit(parsed.get("rider_id", ""))
 		"rider_state":
 			rider_state.emit(parsed.get("rider_id", ""), parsed.get("state", {}))
+		"lobby_update":
+			lobby_update.emit(parsed.get("participants", []))
+		"countdown_started":
+			countdown_started.emit(
+				str(parsed.get("countdown_starts_at", "")),
+				str(parsed.get("race_starts_at", "")),
+			)
+		"race_started":
+			race_started.emit()
+		"race_ended":
+			race_ended.emit(str(parsed.get("reason", "")))

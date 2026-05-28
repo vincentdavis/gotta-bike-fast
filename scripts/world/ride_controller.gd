@@ -30,12 +30,14 @@ var current_ride_id: String = ""
 var current_course: Dictionary = {}
 
 var is_riding: bool = false
+var is_racing: bool = false  # false during the pre-race pen (game mode only)
 var _finishing: bool = false
 var target_power_w: float = STARTING_POWER_W
 var velocity_mps: float = 0.0
 var distance_m: float = 0.0
 var elapsed_s: float = 0.0
 var heading: int = 1  # +1 = facing -Z, -1 = turned around (facing +Z)
+var _start_line_node: Node3D = null
 
 var _samples_buffer: Array = []
 var _sample_accum_s: float = 0.0
@@ -49,8 +51,6 @@ var _course_elevations: Array = []  # cumulative elevation at each waypoint
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
 
-signal _course_picked(course: Dictionary)
-
 
 func _ready() -> void:
 	_setup_environment()
@@ -60,8 +60,11 @@ func _ready() -> void:
 	_setup_camera()
 	_setup_hud()
 	# Road, markers, scenery depend on the chosen course — built post-pick
-	# inside _start_session via _build_course_visuals().
-	_start_session()
+	# inside _start_solo / _start_game via _build_course_visuals().
+	if GameSession.is_solo:
+		_start_solo()
+	else:
+		_start_game()
 
 
 # --- World construction ---
@@ -110,7 +113,8 @@ func _setup_ground() -> void:
 
 func _build_course_visuals() -> void:
 	# Course-dependent visuals: road geometry, markers, and trees all use the
-	# elevation profile. Called after _start_session has picked a course.
+	# elevation profile. Called from _start_solo / _start_game after the
+	# chosen course has been loaded.
 	_compute_course_elevations()
 	_setup_ground_strip()
 	_setup_road()
@@ -417,28 +421,21 @@ func _setup_hud() -> void:
 
 # --- Session startup ---
 
-func _start_session() -> void:
-	hud.set_status("Creating rider…")
-	var rider: Dictionary = await ApiClient.create_rider(
-		"Anonymous", kit.rider.mass_kg, kit.rider.height_m, 200
-	)
-	if rider.is_empty():
-		hud.set_status("Failed to create rider")
-		return
-	rider_id = str(rider["id"])
+func _start_solo() -> void:
+	rider_id = GameSession.rider_id
+	if rider_id.is_empty():
+		hud.set_status("Creating rider…")
+		var rider: Dictionary = await ApiClient.create_rider(
+			"Anonymous", kit.rider.mass_kg, kit.rider.height_m, 200
+		)
+		if rider.is_empty():
+			hud.set_status("Failed to create rider")
+			return
+		rider_id = str(rider["id"])
+		GameSession.rider_id = rider_id
 
-	hud.set_status("Loading courses…")
-	var courses: Array = await ApiClient.list_courses()
-	if courses.is_empty():
-		hud.set_status("No courses available")
-		return
-
-	hud.set_status("")
-	var chosen: Dictionary = await _pick_course(courses)
-	hud.set_status("Loading %s…" % chosen["name"])
-	var detail: Dictionary = await ApiClient.get_course(str(chosen["id"]))
+	var detail := await _resolve_course()
 	if detail.is_empty():
-		hud.set_status("Failed to load course")
 		return
 
 	current_course = detail
@@ -450,74 +447,118 @@ func _start_session() -> void:
 	if ride.is_empty():
 		hud.set_status("Failed to start ride")
 		return
-
 	current_ride_id = str(ride["id"])
+
 	target_power_w = STARTING_POWER_W
 	is_riding = true
+	is_racing = true  # solo starts racing immediately
 	hud.set_status("Go!")
-
-	# Multiplayer: connect to the course's world session. The ride still
-	# works locally if the WS connect fails — ghosts simply won't appear.
-	WorldClient.welcome.connect(_on_welcome)
-	WorldClient.rider_joined.connect(_on_rider_joined)
-	WorldClient.rider_left.connect(_on_rider_left)
-	WorldClient.rider_state.connect(_on_rider_state)
-	WorldClient.connect_to_course(str(detail["id"]), rider_id)
-
-	await get_tree().create_timer(1.5).timeout
+	await get_tree().create_timer(1.2).timeout
 	if is_riding:
 		hud.set_status("")
 
 
-# --- Course picker ---
+func _start_game() -> void:
+	rider_id = GameSession.rider_id
+	if rider_id.is_empty():
+		hud.set_status("Missing rider id; return to menu")
+		return
+	if GameSession.course.is_empty():
+		hud.set_status("Missing course; return to menu")
+		return
 
-func _pick_course(courses: Array) -> Dictionary:
-	var canvas := CanvasLayer.new()
-	add_child(canvas)
+	hud.set_status("Loading %s…" % GameSession.course.get("name", "course"))
+	var detail: Dictionary = await ApiClient.get_course(str(GameSession.course["id"]))
+	if detail.is_empty():
+		hud.set_status("Failed to load course")
+		return
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.0, 0.0, 0.0, 0.65)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	canvas.add_child(bg)
+	current_course = detail
+	hud.set_course(detail["name"], float(detail["length_m"]))
+	_build_course_visuals()
+	_setup_start_line()
 
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	canvas.add_child(center)
+	# Subscribe to the WS signals — connection itself was opened by the lobby.
+	WorldClient.rider_joined.connect(_on_rider_joined)
+	WorldClient.rider_left.connect(_on_rider_left)
+	WorldClient.rider_state.connect(_on_rider_state)
+	WorldClient.race_started.connect(_on_race_started)
+	WorldClient.race_ended.connect(_on_game_race_ended)
 
-	var panel := PanelContainer.new()
-	center.add_child(panel)
+	# Bootstrap ghosts from the participant list captured by the lobby.
+	for p in GameSession.participants:
+		var rid := str(p.get("rider_id", ""))
+		if rid != "" and rid != rider_id:
+			_spawn_ghost(rid)
 
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 24)
-	margin.add_theme_constant_override("margin_right", 24)
-	margin.add_theme_constant_override("margin_top", 18)
-	margin.add_theme_constant_override("margin_bottom", 18)
-	panel.add_child(margin)
+	hud.set_status("Starting ride…")
+	var ride: Dictionary = await ApiClient.start_ride(rider_id, str(detail["id"]))
+	if ride.is_empty():
+		hud.set_status("Failed to start ride")
+		return
+	current_ride_id = str(ride["id"])
 
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	margin.add_child(vbox)
+	target_power_w = STARTING_POWER_W
+	is_riding = true
+	is_racing = false  # held in the pen until race_started
+	hud.set_status("Get ready")
 
-	var title := Label.new()
-	title.text = "Choose a course"
-	title.add_theme_font_size_override("font_size", 28)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
 
-	for c in courses:
-		var btn := Button.new()
-		var name: String = str(c.get("name", "Unnamed"))
-		var length_km: float = float(c.get("length_m", 0.0)) / 1000.0
-		btn.text = "%s · %.1f km" % [name, length_km]
-		btn.add_theme_font_size_override("font_size", 22)
-		btn.custom_minimum_size = Vector2(340, 0)
-		var captured: Dictionary = c
-		btn.pressed.connect(func() -> void: _course_picked.emit(captured))
-		vbox.add_child(btn)
+func _resolve_course() -> Dictionary:
+	# Solo: if the menu already set a course, use it; otherwise pick now.
+	if not GameSession.course.is_empty():
+		var course_id := str(GameSession.course.get("id", ""))
+		if course_id != "":
+			hud.set_status("Loading %s…" % GameSession.course.get("name", "course"))
+			var detail: Dictionary = await ApiClient.get_course(course_id)
+			if not detail.is_empty():
+				return detail
 
-	var picked: Dictionary = await _course_picked
-	canvas.queue_free()
-	return picked
+	hud.set_status("Loading courses…")
+	var courses: Array = await ApiClient.list_courses()
+	if courses.is_empty():
+		hud.set_status("No courses available")
+		return {}
+	hud.set_status("")
+	var picker := CoursePicker.new()
+	add_child(picker)
+	var chosen: Dictionary = await picker.pick(courses)
+	picker.queue_free()
+	hud.set_status("Loading %s…" % chosen.get("name", "course"))
+	var detail2: Dictionary = await ApiClient.get_course(str(chosen["id"]))
+	if detail2.is_empty():
+		hud.set_status("Failed to load course")
+	return detail2
+
+
+func _setup_start_line() -> void:
+	var line := MeshInstance3D.new()
+	var mesh := PlaneMesh.new()
+	mesh.size = Vector2(4.0, 0.3)
+	line.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 1.0, 1.0)
+	line.material_override = mat
+	# Just in front of the rider's spawn (rider sits at z=0; line at z=-1).
+	line.position = Vector3(0.0, _elevation_at_distance(1.0) + 0.03, -1.0)
+	add_child(line)
+	_start_line_node = line
+
+
+func _on_race_started() -> void:
+	is_racing = true
+	hud.hide_countdown()
+	if _start_line_node != null:
+		_start_line_node.queue_free()
+		_start_line_node = null
+	hud.set_status("GO!")
+	await get_tree().create_timer(1.2).timeout
+	if is_riding:
+		hud.set_status("")
+
+
+func _on_game_race_ended(reason: String) -> void:
+	hud.set_status("Game ended: %s" % reason)
 
 
 # --- Input ---
@@ -557,13 +598,17 @@ func _physics_process(delta: float) -> void:
 	# up the hill" reads as a descent.
 	var course_pos := -rider_node.global_position.z
 	var raw_grade := _gradient_at_distance(course_pos)
-	var gradient := raw_grade * float(heading)
+	var gradient := raw_grade * float(heading) if is_racing else 0.0
 	var draft_mult := _compute_draft_multiplier()
-	velocity_mps = CyclingPhysics.step_velocity(
-		target_power_w, velocity_mps, gradient, kit, delta, draft_mult
-	)
-	distance_m += velocity_mps * delta
-	elapsed_s += delta
+	if is_racing:
+		velocity_mps = CyclingPhysics.step_velocity(
+			target_power_w, velocity_mps, gradient, kit, delta, draft_mult
+		)
+		distance_m += velocity_mps * delta
+		elapsed_s += delta
+	else:
+		# Pen: bike is held, so even with power applied no actual speed.
+		velocity_mps = 0.0
 
 	# Lateral steering input (rider's local frame: +X is rider's right).
 	var local_dx := 0.0
@@ -572,8 +617,13 @@ func _physics_process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_RIGHT):
 		local_dx += LATERAL_SPEED_MPS * delta
 
-	# Forward = local -Z; rider_node's rotation handles turn-around.
-	rider_node.translate(Vector3(local_dx, 0.0, -velocity_mps * delta))
+	if is_racing:
+		# Forward = local -Z; rider_node's rotation handles turn-around.
+		rider_node.translate(Vector3(local_dx, 0.0, -velocity_mps * delta))
+	else:
+		# Pen mode: lateral allowed, forward motion locked to z=0.
+		rider_node.translate(Vector3(local_dx, 0.0, 0.0))
+		rider_node.global_position.z = 0.0
 
 	# Soft clamp: keep the rider on the road (road runs along world Z).
 	var world_x := rider_node.global_position.x
@@ -583,7 +633,7 @@ func _physics_process(delta: float) -> void:
 		rider_node.global_position.x = -ROAD_HALF_WIDTH_M
 
 	# Plant the rider on the road surface.
-	rider_node.global_position.y = _elevation_at_distance(course_pos)
+	rider_node.global_position.y = _elevation_at_distance(-rider_node.global_position.z)
 
 	_sample_accum_s += delta
 	var sample_dt := 1.0 / SAMPLE_HZ
@@ -625,6 +675,10 @@ func _physics_process(delta: float) -> void:
 	hud.set_grade(gradient * 100.0)
 	hud.set_elapsed(elapsed_s)
 	hud.set_draft(int(round((1.0 - draft_mult) * 100.0)))
+
+	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
+		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
+		hud.show_countdown(max(0.0, remaining_s))
 
 
 # --- Drafting ---

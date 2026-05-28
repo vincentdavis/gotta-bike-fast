@@ -10,8 +10,8 @@ func _ready() -> void:
 
 func _on_healthz(ok: bool, body: String) -> void:
 	if ok:
-		status_label.text = "Backend: OK\nStarting ride…"
-		await get_tree().create_timer(0.8).timeout
-		get_tree().change_scene_to_file("res://scenes/ride.tscn")
+		status_label.text = "Backend: OK"
+		await get_tree().create_timer(0.5).timeout
+		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 	else:
 		status_label.text = "Backend: UNREACHABLE\n%s\n\nIs uvicorn running?" % body

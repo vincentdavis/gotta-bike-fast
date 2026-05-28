@@ -78,6 +78,77 @@ func finish_ride(ride_id: String) -> Dictionary:
 	return {}
 
 
+# --- Games ---
+
+func list_games() -> Array:
+	var result: Dictionary = await _do_request("GET", "/v1/games", null)
+	if result["ok"] and result["json"] is Array:
+		return result["json"]
+	return []
+
+
+func create_game(
+	host_rider_id: String,
+	course_id: String,
+	countdown_duration_s: int = 30,
+	scheduled_start_in_s: int = -1,
+) -> Dictionary:
+	var body: Dictionary = {
+		"host_rider_id": host_rider_id,
+		"course_id": course_id,
+		"countdown_duration_s": countdown_duration_s,
+	}
+	if scheduled_start_in_s > 0:
+		body["scheduled_start_in_s"] = scheduled_start_in_s
+	var result: Dictionary = await _do_request("POST", "/v1/games", body)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func list_my_games(rider_id: String) -> Array:
+	var result: Dictionary = await _do_request(
+		"GET", "/v1/games/by-rider/%s" % rider_id, null
+	)
+	if result["ok"] and result["json"] is Array:
+		return result["json"]
+	return []
+
+
+func get_game(code: String) -> Dictionary:
+	var result: Dictionary = await _do_request("GET", "/v1/games/" + code, null)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func join_game(code: String, rider_id: String) -> Dictionary:
+	var result: Dictionary = await _do_request(
+		"POST", "/v1/games/%s/join" % code, {"rider_id": rider_id}
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func leave_game(code: String, rider_id: String) -> Dictionary:
+	var result: Dictionary = await _do_request(
+		"POST", "/v1/games/%s/leave" % code, {"rider_id": rider_id}
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func start_game(code: String, rider_id: String) -> Dictionary:
+	var result: Dictionary = await _do_request(
+		"POST", "/v1/games/%s/start" % code, {"rider_id": rider_id}
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
 # --- Internal ---
 
 func _do_request(method: String, path: String, body) -> Dictionary:

@@ -8,6 +8,7 @@ extends CanvasLayer
 @onready var draft_label: Label = $VBox/DraftLabel
 @onready var course_label: Label = $VBox/CourseLabel
 @onready var status_label: Label = $VBox/StatusLabel
+@onready var countdown_label: Label = $CountdownLabel
 
 
 func set_power(w: float) -> void:
@@ -51,3 +52,16 @@ func set_course(name: String, length_m: float) -> void:
 
 func set_status(text: String) -> void:
 	status_label.text = text
+
+
+func show_countdown(seconds_remaining: float) -> void:
+	if seconds_remaining <= 0.0:
+		countdown_label.text = "GO!"
+	elif seconds_remaining < 1.0:
+		countdown_label.text = "GO!"
+	else:
+		countdown_label.text = "%d" % int(ceil(seconds_remaining))
+
+
+func hide_countdown() -> void:
+	countdown_label.text = ""

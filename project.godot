@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 ApiClient="*res://scripts/network/api_client.gd"
 WorldClient="*res://scripts/network/world_client.gd"
+GameSession="*res://scripts/network/game_session.gd"
 
 [physics]
 
