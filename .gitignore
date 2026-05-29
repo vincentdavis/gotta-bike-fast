@@ -2,6 +2,12 @@
 .godot/
 /android/
 
+# Per-project export settings (often carry machine-local paths or signing
+# identity references; Godot also writes secrets to a sibling
+# export_credentials.cfg). Reconfigure locally via Project → Export.
+export_presets.cfg
+export_credentials.cfg
+
 # macOS
 .DS_Store
 
