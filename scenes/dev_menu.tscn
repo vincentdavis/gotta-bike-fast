@@ -1,0 +1,108 @@
+[gd_scene format=3 load_steps=2]
+
+[ext_resource type="Script" path="res://scripts/ui/dev_menu.gd" id="1_dev"]
+
+[node name="DevMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_dev")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.08, 0.10, 0.14, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 80
+theme_override_constants/margin_right = 80
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_bottom = 40
+
+[node name="VBox" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Dev Settings"
+theme_override_font_sizes/font_size = 36
+
+[node name="Subtitle" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Service URLs the client talks to. Persisted to user://dev_settings.cfg."
+theme_override_font_sizes/font_size = 14
+modulate = Color(0.75, 0.75, 0.75, 1)
+
+[node name="BackendLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Backend (FastAPI)"
+theme_override_font_sizes/font_size = 16
+
+[node name="BackendInput" type="LineEdit" parent="Margin/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(480, 0)
+placeholder_text = "http://127.0.0.1:8001"
+theme_override_font_sizes/font_size = 18
+
+[node name="WebLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "Web (Django)"
+theme_override_font_sizes/font_size = 16
+
+[node name="WebInput" type="LineEdit" parent="Margin/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(480, 0)
+placeholder_text = "http://127.0.0.1:8000"
+theme_override_font_sizes/font_size = 18
+
+[node name="WSLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = "WebSocket"
+theme_override_font_sizes/font_size = 16
+
+[node name="WSInput" type="LineEdit" parent="Margin/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(480, 0)
+placeholder_text = "ws://127.0.0.1:8001"
+theme_override_font_sizes/font_size = 18
+
+[node name="StatusLabel" type="Label" parent="Margin/VBox"]
+layout_mode = 2
+text = ""
+theme_override_font_sizes/font_size = 14
+
+[node name="ButtonRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="SaveButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(140, 0)
+text = "Save"
+theme_override_font_sizes/font_size = 18
+
+[node name="TestButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(160, 0)
+text = "Test connections"
+theme_override_font_sizes/font_size = 18
+
+[node name="ResetButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+text = "Reset to defaults"
+theme_override_font_sizes/font_size = 16
+flat = true
+
+[node name="BackButton" type="Button" parent="Margin/VBox/ButtonRow"]
+layout_mode = 2
+text = "Back"
+theme_override_font_sizes/font_size = 16
+flat = true

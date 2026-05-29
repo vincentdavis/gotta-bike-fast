@@ -6,6 +6,7 @@ extends Control
 @onready var my_games_button: Button = $Center/VBox/MyGamesButton
 @onready var switch_rider_button: Button = $Center/VBox/SwitchRiderButton
 @onready var settings_button: Button = $Center/VBox/SettingsButton
+@onready var dev_button: Button = $Center/VBox/DevButton
 @onready var logout_button: Button = $Center/VBox/LogoutButton
 @onready var status_label: Label = $Center/VBox/StatusLabel
 @onready var rider_label: Label = $Center/VBox/RiderLabel
@@ -27,6 +28,7 @@ func _ready() -> void:
 	my_games_button.pressed.connect(_on_my_games_pressed)
 	switch_rider_button.pressed.connect(_on_switch_rider_pressed)
 	settings_button.pressed.connect(_on_settings_pressed)
+	dev_button.pressed.connect(_on_dev_pressed)
 	logout_button.pressed.connect(_on_logout_pressed)
 
 	rider_label.text = "Riding as %s" % GameSession.rider_display_name
@@ -43,6 +45,7 @@ func _set_busy(busy: bool, message: String = "") -> void:
 	my_games_button.disabled = busy
 	switch_rider_button.disabled = busy
 	settings_button.disabled = busy
+	dev_button.disabled = busy
 	logout_button.disabled = busy
 	status_label.text = message
 
@@ -125,6 +128,12 @@ func _on_settings_pressed() -> void:
 	if _busy:
 		return
 	get_tree().change_scene_to_file("res://scenes/settings.tscn")
+
+
+func _on_dev_pressed() -> void:
+	if _busy:
+		return
+	get_tree().change_scene_to_file("res://scenes/dev_menu.tscn")
 
 
 func _on_logout_pressed() -> void:

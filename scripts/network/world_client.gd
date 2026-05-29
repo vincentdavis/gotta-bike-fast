@@ -16,12 +16,14 @@ signal countdown_started(countdown_starts_at: String, race_starts_at: String)
 signal race_started
 signal race_ended(reason: String)
 
-const DEFAULT_WS_URL := "ws://127.0.0.1:8001"
-
-var ws_url: String = DEFAULT_WS_URL
+var ws_url: String = ""  # initialized from DevSettings on _ready
 
 var _peer: WebSocketPeer = null
 var _last_state: int = WebSocketPeer.STATE_CLOSED
+
+
+func _ready() -> void:
+	ws_url = DevSettings.ws_url
 
 
 func connect_to_game(code: String, rider_id: String) -> void:

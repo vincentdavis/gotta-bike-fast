@@ -2,12 +2,12 @@ extends Node
 
 signal healthz_received(ok: bool, body: String)
 
-const DEFAULT_BASE_URL := "http://127.0.0.1:8001"  # FastAPI — live game state
-const DEFAULT_WEB_URL := "http://127.0.0.1:8000"  # Django — accounts + riders + profile
 const AUTH_FILE := "user://auth.cfg"
 
-var base_url: String = DEFAULT_BASE_URL
-var web_url: String = DEFAULT_WEB_URL
+# Live origins — initialized from DevSettings on _ready so the in-game dev
+# menu can override them without touching code.
+var base_url: String = ""  # FastAPI — live game state
+var web_url: String = ""   # Django — accounts + riders + profile
 
 var _access_token: String = ""
 var _refresh_token: String = ""
@@ -15,6 +15,8 @@ var user_id: String = ""
 
 
 func _ready() -> void:
+	base_url = DevSettings.base_url
+	web_url = DevSettings.web_url
 	_load_auth()
 	ping()
 

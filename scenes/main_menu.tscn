@@ -78,6 +78,13 @@ custom_minimum_size = Vector2(320, 0)
 text = "Settings"
 theme_override_font_sizes/font_size = 22
 
+[node name="DevButton" type="Button" parent="Center/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+text = "<dev>"
+theme_override_font_sizes/font_size = 16
+flat = true
+
 [node name="LogoutButton" type="Button" parent="Center/VBox"]
 layout_mode = 2
 custom_minimum_size = Vector2(320, 0)
