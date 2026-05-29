@@ -26,12 +26,14 @@ func _ready() -> void:
 	ws_url = DevSettings.ws_url
 
 
-func connect_to_game(code: String, rider_id: String) -> void:
+func connect_to_game(code: String, rider_id: String, ride_id: String = "") -> void:
 	if _peer != null:
 		_peer.close()
 		_peer = null
 	_peer = WebSocketPeer.new()
 	var url := "%s/ws/game/%s?rider_id=%s" % [ws_url, code, rider_id]
+	if not ride_id.is_empty():
+		url += "&ride_id=" + ride_id
 	var err := _peer.connect_to_url(url)
 	if err != OK:
 		push_warning("WorldClient: connect failed err=%s url=%s" % [err, url])

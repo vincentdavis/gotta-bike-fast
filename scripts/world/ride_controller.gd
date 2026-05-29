@@ -37,12 +37,20 @@ var velocity_mps: float = 0.0
 var distance_m: float = 0.0
 var elapsed_s: float = 0.0
 var peak_speed_mps: float = 0.0
+var peak_power_w: float = 0.0
+var _power_sum: float = 0.0
+var _power_count: int = 0
 var heading: int = 1  # +1 = facing -Z, -1 = turned around (facing +Z)
 var _start_line_node: Node3D = null
 
 var _samples_buffer: Array = []
 var _sample_accum_s: float = 0.0
 var _flush_accum_s: float = 0.0
+var _local_jsonl: FileAccess = null  # appended every sample tick
+var _local_jsonl_path: String = ""
+# Samples that failed to upload — retried on the next flush. Survives a
+# brief network blip without losing data; gets cleared on success.
+var _pending_uploads: Array = []
 
 var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
 var _ghost_targets: Dictionary = {}  # rider_id -> {pos, velocity, yaw, t_ms}
@@ -552,11 +560,19 @@ func _start_solo() -> void:
 	_build_course_visuals()
 
 	hud.set_status("Starting ride…")
-	var ride: Dictionary = await ApiClient.start_ride(rider_id, str(detail["id"]))
+	var ride: Dictionary = await ApiClient.start_ride(
+		rider_id,
+		str(detail["id"]),
+		str(detail.get("name", "")),
+		float(detail.get("length_m", 0.0)),
+		true,  # is_solo
+		"",    # no race code
+	)
 	if ride.is_empty():
 		hud.set_status("Failed to start ride")
 		return
 	current_ride_id = str(ride["id"])
+	_open_local_jsonl()
 
 	target_power_w = STARTING_POWER_W
 	is_riding = true
@@ -609,11 +625,22 @@ func _start_game() -> void:
 		_add_bib_label(rider_node, _my_bib, PLAYER_COLOR)
 
 	hud.set_status("Starting ride…")
-	var ride: Dictionary = await ApiClient.start_ride(rider_id, str(detail["id"]))
+	var ride: Dictionary = await ApiClient.start_ride(
+		rider_id,
+		str(detail["id"]),
+		str(detail.get("name", "")),
+		float(detail.get("length_m", 0.0)),
+		false,  # not solo
+		GameSession.code,  # race code
+	)
 	if ride.is_empty():
 		hud.set_status("Failed to start ride")
 		return
 	current_ride_id = str(ride["id"])
+	_open_local_jsonl()
+	# Re-open the WS connection so it carries the new ride_id for the
+	# server-side finish-on-disconnect path. Lobby opened it without one.
+	WorldClient.connect_to_game(GameSession.code, rider_id, current_ride_id)
 
 	target_power_w = STARTING_POWER_W
 	is_riding = true
@@ -679,6 +706,26 @@ func _on_game_race_ended(reason: String) -> void:
 
 
 # --- Input ---
+
+func _notification(what: int) -> void:
+	# Best-effort finish when the user closes the window mid-ride. Godot
+	# stops the scene tree promptly so this is "fire and try"; the server
+	# sweeper will catch us if the POST never reaches Django.
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and is_riding and not _finishing:
+		_finishing = true
+		_close_local_jsonl()
+		ApiClient.finish_ride(
+			current_ride_id,
+			{
+				"total_distance_m": distance_m,
+				"total_duration_s": elapsed_s,
+				"avg_power_w": _avg_power_so_far(),
+				"max_power_w": _max_power_so_far(),
+				"peak_speed_mps": peak_speed_mps,
+			},
+			"app_relaunch",
+		)
+
 
 func _input(event: InputEvent) -> void:
 	if not is_riding:
@@ -766,6 +813,11 @@ func _physics_process(delta: float) -> void:
 				"power_w": target_power_w,
 			}
 		)
+		# Track running max/avg so finish() has them without re-scanning.
+		if target_power_w > peak_power_w:
+			peak_power_w = target_power_w
+		_power_sum += target_power_w
+		_power_count += 1
 
 	_flush_accum_s += delta
 	if _flush_accum_s >= SAMPLE_FLUSH_S and not _samples_buffer.is_empty():
@@ -890,14 +942,41 @@ func _gradient_at_distance(d: float) -> float:
 # --- Sample flush + finish ---
 
 func _flush_samples() -> void:
-	if _samples_buffer.is_empty():
+	if _samples_buffer.is_empty() and _pending_uploads.is_empty():
 		return
-	var to_send := _samples_buffer.duplicate()
+	# Drain the buffer to disk first — that's the durable copy.
+	if _local_jsonl != null and not _samples_buffer.is_empty():
+		for s in _samples_buffer:
+			_local_jsonl.store_line(JSON.stringify(s))
+		_local_jsonl.flush()
+	# Combine any leftover retries with this flush's payload.
+	var to_send: Array = _pending_uploads + _samples_buffer
 	_samples_buffer.clear()
+	_pending_uploads.clear()
+	if to_send.is_empty():
+		return
 	var ok: bool = await ApiClient.post_samples(current_ride_id, to_send)
 	if not ok:
-		_samples_buffer = to_send + _samples_buffer
-		push_warning("Sample flush failed, re-buffering %d samples" % to_send.size())
+		_pending_uploads = to_send
+		push_warning("Sample flush failed, buffering %d for retry" % to_send.size())
+
+
+func _open_local_jsonl() -> void:
+	if current_ride_id.is_empty():
+		return
+	var dir := "user://activities/%s" % rider_id
+	DirAccess.make_dir_recursive_absolute(dir)
+	_local_jsonl_path = "%s/%s.jsonl" % [dir, current_ride_id]
+	_local_jsonl = FileAccess.open(_local_jsonl_path, FileAccess.WRITE)
+	if _local_jsonl == null:
+		push_warning("Could not open local JSONL: %s" % _local_jsonl_path)
+
+
+func _close_local_jsonl() -> void:
+	if _local_jsonl != null:
+		_local_jsonl.flush()
+		_local_jsonl.close()
+		_local_jsonl = null
 
 
 func _finish_ride() -> void:
@@ -908,21 +987,30 @@ func _finish_ride() -> void:
 	WorldClient.disconnect_now()
 	hud.set_status("Finishing ride…")
 
-	if not _samples_buffer.is_empty():
-		var ok: bool = await ApiClient.post_samples(current_ride_id, _samples_buffer)
-		if not ok:
-			push_warning("Failed to post final samples")
-		_samples_buffer.clear()
+	# Flush the in-memory tail to disk + Django before announcing finish.
+	await _flush_samples()
+	_close_local_jsonl()
 
-	var result: Dictionary = await ApiClient.finish_ride(current_ride_id)
+	# Pass the client's locally-computed aggregates so Django can record
+	# them without having to re-scan the JSONL.
+	var totals: Dictionary = {
+		"total_distance_m": distance_m,
+		"total_duration_s": elapsed_s,
+		"avg_power_w": _avg_power_so_far(),
+		"max_power_w": _max_power_so_far(),
+		"peak_speed_mps": peak_speed_mps,
+	}
+	var result: Dictionary = await ApiClient.finish_ride(
+		current_ride_id, totals, "explicit"
+	)
 	if result.is_empty():
 		hud.set_status("Finish failed")
 		return
 
-	var dist_km := float(result.get("total_distance_m", 0.0)) / 1000.0
-	var time_s := float(result.get("total_duration_s", 0.0))
-	var avg_w := int(round(float(result.get("avg_power_w", 0.0))))
-	var max_w := int(round(float(result.get("max_power_w", 0.0))))
+	var dist_km := float(result.get("total_distance_m", distance_m)) / 1000.0
+	var time_s := float(result.get("total_duration_s", elapsed_s))
+	var avg_w := int(round(float(result.get("avg_power_w", totals["avg_power_w"]))))
+	var max_w := int(round(float(result.get("max_power_w", totals["max_power_w"]))))
 	hud.set_status("")
 	hud.hide_countdown()
 	# Game mode: jump to the shared race-results screen (live standings).
@@ -931,6 +1019,16 @@ func _finish_ride() -> void:
 		get_tree().change_scene_to_file("res://scenes/results.tscn")
 		return
 	_show_summary(dist_km, time_s, avg_w, max_w)
+
+
+func _avg_power_so_far() -> float:
+	if _power_count <= 0:
+		return 0.0
+	return _power_sum / float(_power_count)
+
+
+func _max_power_so_far() -> float:
+	return peak_power_w
 
 
 func _show_summary(dist_km: float, time_s: float, avg_w: int, max_w: int) -> void:

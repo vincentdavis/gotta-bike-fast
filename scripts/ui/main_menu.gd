@@ -10,6 +10,7 @@ extends Control
 @onready var logout_button: Button = $Center/VBox/LogoutButton
 @onready var status_label: Label = $Center/VBox/StatusLabel
 @onready var rider_label: Label = $Center/VBox/RiderLabel
+@onready var signed_in_label: Label = $Center/VBox/SignedInLabel
 
 var _busy: bool = false
 
@@ -32,9 +33,20 @@ func _ready() -> void:
 	logout_button.pressed.connect(_on_logout_pressed)
 
 	rider_label.text = "Riding as %s" % GameSession.rider_display_name
+	signed_in_label.text = "Signed in as %s" % ApiClient.user_label()
 	# Wipe any leftover game state from a previous session, but keep the
 	# picked rider so the menu reflects it.
 	GameSession.reset()
+	# Lazy-populate the cached User profile fields on first launch after
+	# upgrading (auth.cfg from older builds won't have email / display_name).
+	if ApiClient.user_display_name.is_empty() and ApiClient.user_email.is_empty():
+		_fetch_user_async()
+
+
+func _fetch_user_async() -> void:
+	await ApiClient.get_me()
+	if is_inside_tree():
+		signed_in_label.text = "Signed in as %s" % ApiClient.user_label()
 
 
 func _set_busy(busy: bool, message: String = "") -> void:
@@ -115,7 +127,7 @@ func _on_join_pressed() -> void:
 func _on_my_games_pressed() -> void:
 	if _busy:
 		return
-	get_tree().change_scene_to_file("res://scenes/my_games.tscn")
+	OS.shell_open(ApiClient.web_games_url())
 
 
 func _on_switch_rider_pressed() -> void:

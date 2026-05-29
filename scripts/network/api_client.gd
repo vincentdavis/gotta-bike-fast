@@ -12,6 +12,8 @@ var web_url: String = ""   # Django — accounts + riders + profile
 var _access_token: String = ""
 var _refresh_token: String = ""
 var user_id: String = ""
+var user_email: String = ""
+var user_display_name: String = ""
 
 
 func _ready() -> void:
@@ -53,18 +55,47 @@ func web_riders_url() -> String:
 	return web_url + "/riders/"
 
 
+func web_games_url() -> String:
+	return web_url + "/games/"
+
+
+func web_rides_url() -> String:
+	return web_url + "/rides/"
+
+
 func logout() -> void:
 	_access_token = ""
 	_refresh_token = ""
 	user_id = ""
+	user_email = ""
+	user_display_name = ""
 	_save_auth()
 
 
 func get_me() -> Dictionary:
 	var result: Dictionary = await _do_request("GET", "/api/users/me", null, web_url)
 	if result["ok"] and result["json"] is Dictionary:
+		_set_user_from_dict(result["json"])
+		_save_auth()
 		return result["json"]
 	return {}
+
+
+func user_label() -> String:
+	# Best-effort display name for nav / menu chrome. Falls back to email
+	# if the User row has no display_name set yet, and to "(signed in)"
+	# if we have a token but never fetched profile.
+	if not user_display_name.is_empty():
+		return user_display_name
+	if not user_email.is_empty():
+		return user_email
+	return "(signed in)"
+
+
+func _set_user_from_dict(u: Dictionary) -> void:
+	user_id = str(u.get("id", user_id))
+	user_email = str(u.get("email", user_email))
+	user_display_name = str(u.get("display_name", user_display_name))
 
 
 func update_me(updates: Dictionary) -> Dictionary:
@@ -96,8 +127,7 @@ func _set_tokens_from_response(data: Dictionary) -> void:
 	var tokens: Dictionary = data.get("tokens", {})
 	_access_token = str(tokens.get("access_token", ""))
 	_refresh_token = str(tokens.get("refresh_token", ""))
-	var u: Dictionary = data.get("user", {})
-	user_id = str(u.get("id", ""))
+	_set_user_from_dict(data.get("user", {}))
 	_save_auth()
 
 
@@ -106,6 +136,8 @@ func _save_auth() -> void:
 	cfg.set_value("auth", "access_token", _access_token)
 	cfg.set_value("auth", "refresh_token", _refresh_token)
 	cfg.set_value("auth", "user_id", user_id)
+	cfg.set_value("user", "email", user_email)
+	cfg.set_value("user", "display_name", user_display_name)
 	cfg.save(AUTH_FILE)
 
 
@@ -116,6 +148,8 @@ func _load_auth() -> void:
 	_access_token = str(cfg.get_value("auth", "access_token", ""))
 	_refresh_token = str(cfg.get_value("auth", "refresh_token", ""))
 	user_id = str(cfg.get_value("auth", "user_id", ""))
+	user_email = str(cfg.get_value("user", "email", ""))
+	user_display_name = str(cfg.get_value("user", "display_name", ""))
 
 
 # --- Public API ---
@@ -142,11 +176,26 @@ func get_course(course_id: String) -> Dictionary:
 	return {}
 
 
-func start_ride(rider_id: String, course_id: String) -> Dictionary:
+# --- Ride history (Django-owned) ---
+
+func start_ride(
+	rider_id: String,
+	course_id: String,
+	course_name: String = "",
+	course_length_m: float = 0.0,
+	is_solo: bool = true,
+	race_code: String = "",
+) -> Dictionary:
+	var body: Dictionary = {
+		"rider_id": rider_id,
+		"course_id": course_id,
+		"course_name": course_name,
+		"course_length_m": course_length_m,
+		"is_solo": is_solo,
+		"race_code": race_code,
+	}
 	var result: Dictionary = await _do_request(
-		"POST",
-		"/v1/rides",
-		{"rider_id": rider_id, "course_id": course_id},
+		"POST", "/api/history/rides", body, web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
 		return result["json"]
@@ -155,16 +204,39 @@ func start_ride(rider_id: String, course_id: String) -> Dictionary:
 
 func post_samples(ride_id: String, samples: Array) -> bool:
 	var result: Dictionary = await _do_request(
-		"POST", "/v1/rides/%s/samples" % ride_id, {"samples": samples}
+		"POST",
+		"/api/history/rides/%s/samples" % ride_id,
+		{"samples": samples},
+		web_url,
 	)
 	return result["ok"]
 
 
-func finish_ride(ride_id: String) -> Dictionary:
-	var result: Dictionary = await _do_request("POST", "/v1/rides/%s/finish" % ride_id, null)
+func finish_ride(
+	ride_id: String,
+	totals: Dictionary = {},
+	reason: String = "explicit",
+) -> Dictionary:
+	var body: Dictionary = totals.duplicate()
+	body["reason"] = reason
+	var result: Dictionary = await _do_request(
+		"POST", "/api/history/rides/%s/finish" % ride_id, body, web_url
+	)
 	if result["ok"] and result["json"] is Dictionary:
 		return result["json"]
 	return {}
+
+
+func list_active_rides(rider_id: String) -> Array:
+	var result: Dictionary = await _do_request(
+		"GET",
+		"/api/history/rides/active?rider_id=%s" % rider_id,
+		null,
+		web_url,
+	)
+	if result["ok"] and result["json"] is Array:
+		return result["json"]
+	return []
 
 
 # --- Games ---
@@ -207,8 +279,14 @@ func list_my_games(rider_id: String) -> Array:
 
 
 func list_game_results(code: String) -> Array:
+	# After Phase 5e race results are derived from Django's RideHistory
+	# rows tagged with this race code. The dedicated endpoint lands in
+	# 5e-8; until then, results.tscn falls back to GameSession participants.
 	var result: Dictionary = await _do_request(
-		"GET", "/v1/games/%s/results" % code, null
+		"GET",
+		"/api/history/rides?race_code=%s&limit=50" % code,
+		null,
+		web_url,
 	)
 	if result["ok"] and result["json"] is Array:
 		return result["json"]

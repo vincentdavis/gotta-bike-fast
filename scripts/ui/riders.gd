@@ -161,7 +161,24 @@ func _select(rider: Dictionary) -> void:
 	if _busy:
 		return
 	GameSession.set_rider(rider)
+	# Finalize any rides left active by a prior crash / force-quit / network
+	# drop for this rider. Server sweeps within minutes anyway; this just
+	# closes the loop instantly so "My Rides" reflects truth.
+	_set_busy(true, "Cleaning up prior rides…")
+	await _auto_finalize_active(rider.get("id", ""))
+	_set_busy(false, "")
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+
+func _auto_finalize_active(rider_id: String) -> void:
+	if rider_id.is_empty():
+		return
+	var active: Array = await ApiClient.list_active_rides(rider_id)
+	for r in active:
+		var rid := str(r.get("id", ""))
+		if rid.is_empty():
+			continue
+		await ApiClient.finish_ride(rid, {}, "app_relaunch")
 
 
 func _on_manage_pressed() -> void:
