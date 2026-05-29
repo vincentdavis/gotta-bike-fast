@@ -120,6 +120,12 @@ func _build_row(rider: Dictionary) -> PanelContainer:
 	stats.add_theme_font_size_override("font_size", 16)
 	info.add_child(stats)
 
+	var loadout := Label.new()
+	loadout.text = _loadout_line(rider)
+	loadout.add_theme_font_size_override("font_size", 14)
+	loadout.modulate = Color(0.75, 0.78, 0.85)
+	info.add_child(loadout)
+
 	var select_btn := Button.new()
 	select_btn.text = "Select"
 	select_btn.add_theme_font_size_override("font_size", 18)
@@ -129,6 +135,26 @@ func _build_row(rider: Dictionary) -> PanelContainer:
 	hbox.add_child(select_btn)
 
 	return panel
+
+
+func _loadout_line(rider: Dictionary) -> String:
+	# "Bike: <name> · Wheels: <name> · Tires: <name>" with "stock" for any
+	# slot the rider hasn't equipped yet. Dictionary.get returns Variant,
+	# so type each slot explicitly to satisfy the GDScript inference
+	# warning being treated as an error.
+	var bike: Variant = rider.get("bike")
+	var wheels: Variant = rider.get("wheels")
+	var tires: Variant = rider.get("tires")
+	var b: String = "stock"
+	var w: String = "stock"
+	var t: String = "stock"
+	if bike is Dictionary:
+		b = str((bike as Dictionary).get("name", "stock"))
+	if wheels is Dictionary:
+		w = str((wheels as Dictionary).get("name", "stock"))
+	if tires is Dictionary:
+		t = str((tires as Dictionary).get("name", "stock"))
+	return "Bike: %s · Wheels: %s · Tires: %s" % [b, w, t]
 
 
 func _select(rider: Dictionary) -> void:

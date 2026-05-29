@@ -33,11 +33,12 @@ func _render_rider_summary() -> void:
 	if not GameSession.has_rider():
 		rider_summary.text = "(no rider selected)"
 		return
-	rider_summary.text = "%s · %.1f kg · %.2f m · FTP %d W" % [
+	rider_summary.text = "%s · %.1f kg · %.2f m · FTP %d W\n%s" % [
 		GameSession.rider_display_name,
 		GameSession.rider_weight_kg,
 		GameSession.rider_height_m,
 		GameSession.rider_ftp_w,
+		GameSession.loadout_summary(),
 	]
 
 

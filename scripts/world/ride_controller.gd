@@ -84,6 +84,22 @@ func _apply_rider_to_kit() -> void:
 	kit.rider.height_m = GameSession.rider_height_m
 	kit.rider.cda_factor = GameSession.rider_cda_factor
 
+	# Apply the equipped loadout. Any slot the rider hasn't equipped yet
+	# stays at the PhysicsKit default so the sim never crashes on an
+	# un-configured profile.
+	if not GameSession.rider_bike.is_empty():
+		kit.bike.mass_kg = float(GameSession.rider_bike.get("mass_kg", kit.bike.mass_kg))
+		kit.bike.cda_m2 = float(GameSession.rider_bike.get("cda_m2", kit.bike.cda_m2))
+	if not GameSession.rider_wheels.is_empty():
+		kit.wheels.mass_kg = float(GameSession.rider_wheels.get("mass_kg", kit.wheels.mass_kg))
+		kit.wheels.cda_m2 = float(GameSession.rider_wheels.get("cda_m2", kit.wheels.cda_m2))
+	if not GameSession.rider_tires.is_empty():
+		kit.tires.mass_kg = float(GameSession.rider_tires.get("mass_kg", kit.tires.mass_kg))
+		kit.tires.cda_m2 = float(GameSession.rider_tires.get("cda_m2", kit.tires.cda_m2))
+		kit.tires.crr = float(GameSession.rider_tires.get("crr", kit.tires.crr))
+		kit.tires.size_mm = int(GameSession.rider_tires.get("size_mm", kit.tires.size_mm))
+		kit.tires.tread_type = str(GameSession.rider_tires.get("tread_type", kit.tires.tread_type))
+
 
 # --- World construction ---
 
