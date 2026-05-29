@@ -59,7 +59,22 @@ var _ghost_bibs: Dictionary = {}  # rider_id -> bib_number
 var _ghost_distances: Dictionary = {}  # rider_id -> latest reported distance_m
 var _my_bib: int = 0
 var _world_state_accum_s: float = 0.0
-var _course_elevations: Array = []  # cumulative elevation at each waypoint
+# Course path: list of {distance_m, x_m, y_m, elevation_m}. Populated from
+# Course.path when the server provides it; otherwise synthesized as a
+# straight path along world -Z so legacy elevation-only courses still work.
+var _course_path: Array = []
+# Per-waypoint smoothed tangent + right vectors (world XZ unit, y=0).
+# Computed once in _build_course_visuals as the bisector of incoming and
+# outgoing segment tangents. Used by every consumer (road mesh, ground
+# strip, markers, rider physics) so corners meet without kinks and the
+# rider's rotation eases through turns instead of snapping at segment
+# boundaries.
+var _waypoint_tangents: Array = []
+var _waypoint_rights: Array = []
+# Rider's perpendicular offset across the road (positive = right side
+# when facing forward along the path). Replaces the implicit
+# global_position.x in the old straight-road world.
+var _lateral_offset: float = 0.0
 
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
@@ -127,7 +142,10 @@ func _setup_environment() -> void:
 func _setup_ground() -> void:
 	var ground := MeshInstance3D.new()
 	var mesh := PlaneMesh.new()
-	mesh.size = Vector2(4000, 4000)
+	# Curved courses can stretch over a couple of kilometres laterally;
+	# 12km × 12km plane keeps the horizon under us for any Test Curves or
+	# typical-ride GPX shape we'll throw at it.
+	mesh.size = Vector2(12000, 12000)
 	ground.mesh = mesh
 
 	# Procedural grass texture: tiled Perlin noise mapped through a green ramp.
@@ -154,42 +172,77 @@ func _setup_ground() -> void:
 
 
 func _build_course_visuals() -> void:
-	# Course-dependent visuals: road geometry, markers, and trees all use the
-	# elevation profile. Called from _start_solo / _start_game after the
-	# chosen course has been loaded.
-	_compute_course_elevations()
+	# Course-dependent visuals: ground strip, road, markers, scenery — all
+	# built from the course path (curved when the server provides one;
+	# otherwise synthesized straight from elevation_profile).
+	_compute_course_path()
+	_compute_waypoint_frames()
 	_setup_ground_strip()
 	_setup_road()
 	_setup_markers()
 	_setup_scenery()
 
 
+func _compute_waypoint_frames() -> void:
+	# Average the incoming and outgoing segment tangents at every waypoint.
+	# Equivalent to a "miter join" — adjacent road / ground-strip quads
+	# share corners along this smoothed normal, so seams disappear, and
+	# the rider's rotation eases through curves instead of snapping at
+	# segment boundaries.
+	_waypoint_tangents = []
+	_waypoint_rights = []
+	var n := _course_path.size()
+	if n < 2:
+		return
+	for i in range(n):
+		var p: Dictionary = _course_path[i]
+		var c := Vector3(float(p["x_m"]), 0, -float(p["y_m"]))
+		var t_in := Vector3.ZERO
+		var t_out := Vector3.ZERO
+		if i > 0:
+			var pp: Dictionary = _course_path[i - 1]
+			t_in = c - Vector3(float(pp["x_m"]), 0, -float(pp["y_m"]))
+			t_in = t_in.normalized() if t_in.length() > 1e-6 else Vector3.ZERO
+		if i + 1 < n:
+			var pn: Dictionary = _course_path[i + 1]
+			t_out = Vector3(float(pn["x_m"]), 0, -float(pn["y_m"])) - c
+			t_out = t_out.normalized() if t_out.length() > 1e-6 else Vector3.ZERO
+		var tng := t_in + t_out
+		if tng.length() < 1e-6:
+			tng = t_out if t_out.length() > 0.5 else t_in
+		if tng.length() < 1e-6:
+			tng = Vector3(0, 0, -1)
+		tng = tng.normalized()
+		_waypoint_tangents.append(tng)
+		_waypoint_rights.append(Vector3(-tng.z, 0, tng.x))
+
+
 func _setup_ground_strip() -> void:
-	# Wide ground bed that follows the road's elevation, so the road and
-	# trees don't appear to float above the flat backdrop. Same per-segment
-	# tilt as the road, just much wider.
-	const STRIP_WIDTH := 240.0
-	const STRIP_LENGTH := 20000.0
-	const SEGMENT_LENGTH := 5.0
-	const NUM_SEGMENTS := int(STRIP_LENGTH / SEGMENT_LENGTH)
-
-	var multi := MultiMesh.new()
-	multi.transform_format = MultiMesh.TRANSFORM_3D
-	multi.instance_count = NUM_SEGMENTS
-	var seg_mesh := PlaneMesh.new()
-	seg_mesh.size = Vector2(STRIP_WIDTH, SEGMENT_LENGTH)
-	multi.mesh = seg_mesh
-	for i in NUM_SEGMENTS:
-		var d_mid: float = float(i) * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5
-		var y_mid := _elevation_at_distance(d_mid)
-		var grade := _gradient_at_distance(d_mid)
-		var pitch := atan(grade)
-		var basis := Basis().rotated(Vector3.RIGHT, pitch)
-		var origin := Vector3(0.0, y_mid, -d_mid)
-		multi.set_instance_transform(i, Transform3D(basis, origin))
-
-	var inst := MultiMeshInstance3D.new()
-	inst.multimesh = multi
+	# Wide green ribbon that follows the path's elevation. Without this
+	# the flat ground plane sits at y=0 and the climbing road appears to
+	# hover above it. Width is generous enough that the strip covers the
+	# visible foreground on either side of the road for typical courses.
+	const STRIP_HALF_WIDTH := 120.0
+	if _course_path.size() < 2 or _waypoint_rights.size() < 2:
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(_course_path.size() - 1):
+		var p0: Dictionary = _course_path[i]
+		var p1: Dictionary = _course_path[i + 1]
+		var c0 := Vector3(float(p0["x_m"]), float(p0["elevation_m"]), -float(p0["y_m"]))
+		var c1 := Vector3(float(p1["x_m"]), float(p1["elevation_m"]), -float(p1["y_m"]))
+		var r0: Vector3 = _waypoint_rights[i]
+		var r1: Vector3 = _waypoint_rights[i + 1]
+		var l0 := c0 - r0 * STRIP_HALF_WIDTH
+		var rr0 := c0 + r0 * STRIP_HALF_WIDTH
+		var l1 := c1 - r1 * STRIP_HALF_WIDTH
+		var rr1 := c1 + r1 * STRIP_HALF_WIDTH
+		st.add_vertex(l0); st.add_vertex(l1); st.add_vertex(rr0)
+		st.add_vertex(rr0); st.add_vertex(l1); st.add_vertex(rr1)
+	st.generate_normals()
+	var inst := MeshInstance3D.new()
+	inst.mesh = st.commit()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.34, 0.55, 0.28)
 	mat.roughness = 1.0
@@ -197,157 +250,276 @@ func _setup_ground_strip() -> void:
 	add_child(inst)
 
 
-func _compute_course_elevations() -> void:
-	_course_elevations = []
+func _compute_course_path() -> void:
+	_course_path = []
 	if current_course.is_empty():
 		return
+	var raw_path: Array = current_course.get("path", [])
+	if raw_path.size() >= 2:
+		for p in raw_path:
+			_course_path.append({
+				"distance_m": float(p["distance_m"]),
+				"x_m": float(p["x_m"]),
+				"y_m": float(p["y_m"]),
+				"elevation_m": float(p["elevation_m"]),
+			})
+		return
+
+	# Fallback: synthesize a straight path along world -Z (positive local
+	# Y = forward) from elevation_profile. Cumulative elevation is the
+	# integral of (gradient × distance step).
 	var profile: Array = current_course.get("elevation_profile", [])
 	if profile.size() < 2:
+		_course_path = [{"distance_m": 0.0, "x_m": 0.0, "y_m": 0.0, "elevation_m": 0.0}]
 		return
-	_course_elevations.resize(profile.size())
-	_course_elevations[0] = 0.0
-	for i in range(1, profile.size()):
-		var p0: Dictionary = profile[i - 1]
-		var p1: Dictionary = profile[i]
+	var cum_ele := 0.0
+	for i in profile.size():
+		var p: Dictionary = profile[i]
+		var d := float(p["distance_m"])
+		var g := float(p["gradient"])
+		if i > 0:
+			var prev: Dictionary = profile[i - 1]
+			var dd := d - float(prev["distance_m"])
+			var avg_g := (float(prev["gradient"]) + g) * 0.5
+			cum_ele += dd * avg_g
+		_course_path.append({
+			"distance_m": d,
+			"x_m": 0.0,
+			"y_m": d,
+			"elevation_m": cum_ele,
+		})
+
+
+func _find_path_segment(d: float) -> int:
+	# Returns index i such that path[i].distance_m <= d <= path[i+1].distance_m.
+	if _course_path.size() < 2:
+		return 0
+	# Linear scan — bounded by path length (~500 for the Test Curves course,
+	# fine at 60 Hz). Switch to binary search if real GPX routes get huge.
+	for i in range(_course_path.size() - 1):
+		if d <= float(_course_path[i + 1]["distance_m"]):
+			return i
+	return _course_path.size() - 2
+
+
+func _wrap_distance(d: float) -> float:
+	var length := float(current_course.get("length_m", 0.0))
+	if length <= 0.0:
+		return d
+	return fposmod(d, length)
+
+
+func _position_at_distance(d: float) -> Vector3:
+	# World position (x east, y up, z = -y_north). Linearly interpolated
+	# between consecutive path waypoints. Falls back to origin if path
+	# isn't ready yet.
+	if _course_path.size() < 2:
+		return Vector3.ZERO
+	var dd := _wrap_distance(d)
+	var i := _find_path_segment(dd)
+	var p0: Dictionary = _course_path[i]
+	var p1: Dictionary = _course_path[i + 1]
+	var d0 := float(p0["distance_m"])
+	var d1 := float(p1["distance_m"])
+	var t := 0.0 if d1 <= d0 else (dd - d0) / (d1 - d0)
+	var x: float = lerpf(float(p0["x_m"]), float(p1["x_m"]), t)
+	var y: float = lerpf(float(p0["y_m"]), float(p1["y_m"]), t)
+	var ele: float = lerpf(float(p0["elevation_m"]), float(p1["elevation_m"]), t)
+	return Vector3(x, ele, -y)
+
+
+func _tangent_at_distance(d: float) -> Vector3:
+	# Unit world XZ vector pointing along the direction of travel. Falls
+	# back to the segment-direction tangent when waypoint frames aren't
+	# computed yet (e.g., during the first frame).
+	if _course_path.size() < 2:
+		return Vector3(0, 0, -1)
+	var dd := _wrap_distance(d)
+	var i := _find_path_segment(dd)
+	if _waypoint_tangents.size() == _course_path.size():
+		var p0: Dictionary = _course_path[i]
+		var p1: Dictionary = _course_path[i + 1]
 		var d0 := float(p0["distance_m"])
 		var d1 := float(p1["distance_m"])
-		var g0 := float(p0["gradient"])
-		var g1 := float(p1["gradient"])
-		var avg_g := (g0 + g1) * 0.5
-		_course_elevations[i] = _course_elevations[i - 1] + (d1 - d0) * avg_g
+		var t: float = 0.0 if d1 <= d0 else (dd - d0) / (d1 - d0)
+		var tng: Vector3 = (_waypoint_tangents[i] as Vector3).lerp(
+			_waypoint_tangents[i + 1] as Vector3, t
+		)
+		if tng.length() < 1e-6:
+			return Vector3(0, 0, -1)
+		return tng.normalized()
+	# Fallback: raw segment direction.
+	var p0b: Dictionary = _course_path[i]
+	var p1b: Dictionary = _course_path[i + 1]
+	var dx := float(p1b["x_m"]) - float(p0b["x_m"])
+	var dy := float(p1b["y_m"]) - float(p0b["y_m"])
+	var tan_b := Vector3(dx, 0, -dy)
+	if tan_b.length() < 1e-6:
+		return Vector3(0, 0, -1)
+	return tan_b.normalized()
+
+
+func _heading_at_distance(d: float) -> float:
+	# Godot rotation.y so that the rider's default forward (-Z) aligns
+	# with the tangent. forward = (-sin(y), 0, -cos(y)), so for tangent
+	# (tx, 0, tz) we need y = atan2(-tx, -tz).
+	var tng := _tangent_at_distance(d)
+	return atan2(-tng.x, -tng.z)
 
 
 func _elevation_at_distance(d: float) -> float:
-	if _course_elevations.is_empty() or current_course.is_empty():
-		return 0.0
-	var profile: Array = current_course.get("elevation_profile", [])
-	if profile.size() < 2:
-		return 0.0
-	var length := float(current_course.get("length_m", 0.0))
-	if length > 0.0:
-		d = fposmod(d, length)
-	for i in range(profile.size() - 1):
-		var p0: Dictionary = profile[i]
-		var p1: Dictionary = profile[i + 1]
-		var d0 := float(p0["distance_m"])
-		var d1 := float(p1["distance_m"])
-		if d >= d0 and d <= d1:
-			if d1 <= d0:
-				return float(_course_elevations[i])
-			var g0 := float(p0["gradient"])
-			var g1 := float(p1["gradient"])
-			var t := (d - d0) / (d1 - d0)
-			var g_at_d := lerpf(g0, g1, t)
-			var avg := (g0 + g_at_d) * 0.5
-			return float(_course_elevations[i]) + (d - d0) * avg
-	return 0.0
+	return _position_at_distance(d).y
 
 
 func _setup_road() -> void:
 	const ROAD_WIDTH := 4.0
-	const ROAD_LENGTH := 20000.0
-	const SEGMENT_LENGTH := 5.0
-	const NUM_SEGMENTS := int(ROAD_LENGTH / SEGMENT_LENGTH)
+	const LINE_WIDTH := 0.15
 	const DASH_LENGTH := 3.0
 	const DASH_PERIOD := 8.0
-	const DASH_COVERAGE := 10000.0
-	const LINE_WIDTH := 0.15
+	if _course_path.size() < 2:
+		return
 
-	# Asphalt: short plane segments, each pitched to match the local gradient,
-	# stacked from y = elevation_at_distance(midpoint). Single MultiMesh =
-	# one draw call.
-	var road_multi := MultiMesh.new()
-	road_multi.transform_format = MultiMesh.TRANSFORM_3D
-	road_multi.instance_count = NUM_SEGMENTS
-	var road_mesh := PlaneMesh.new()
-	road_mesh.size = Vector2(ROAD_WIDTH, SEGMENT_LENGTH)
-	road_multi.mesh = road_mesh
-	for i in NUM_SEGMENTS:
-		var d_mid: float = float(i) * SEGMENT_LENGTH + SEGMENT_LENGTH * 0.5
-		var y_mid := _elevation_at_distance(d_mid)
-		var grade := _gradient_at_distance(d_mid)
-		var pitch := atan(grade)
-		var basis := Basis().rotated(Vector3.RIGHT, pitch)
-		var origin := Vector3(0.0, y_mid + 0.01, -d_mid)
-		road_multi.set_instance_transform(i, Transform3D(basis, origin))
+	# Asphalt: one ArrayMesh assembled from quads whose corners use the
+	# pre-computed waypoint right vectors. Sharing corners between adjacent
+	# segments (miter join) keeps the surface continuous through turns
+	# with no visible seams.
+	var asphalt := SurfaceTool.new()
+	asphalt.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half_w := ROAD_WIDTH * 0.5
+	var lift := Vector3(0, 0.05, 0)
+	for i in range(_course_path.size() - 1):
+		var p0: Dictionary = _course_path[i]
+		var p1: Dictionary = _course_path[i + 1]
+		var pos0 := Vector3(float(p0["x_m"]), float(p0["elevation_m"]), -float(p0["y_m"])) + lift
+		var pos1 := Vector3(float(p1["x_m"]), float(p1["elevation_m"]), -float(p1["y_m"])) + lift
+		var r0: Vector3 = _waypoint_rights[i] if i < _waypoint_rights.size() else Vector3.ZERO
+		var r1: Vector3 = _waypoint_rights[i + 1] if i + 1 < _waypoint_rights.size() else r0
+		var left0 := pos0 - r0 * half_w
+		var right0 := pos0 + r0 * half_w
+		var left1 := pos1 - r1 * half_w
+		var right1 := pos1 + r1 * half_w
+		# Two triangles forming the quad. Winding: counter-clockwise when
+		# viewed from above so the normal points +Y.
+		asphalt.add_vertex(left0)
+		asphalt.add_vertex(left1)
+		asphalt.add_vertex(right0)
+		asphalt.add_vertex(right0)
+		asphalt.add_vertex(left1)
+		asphalt.add_vertex(right1)
+	asphalt.generate_normals()
+	var asphalt_inst := MeshInstance3D.new()
+	asphalt_inst.mesh = asphalt.commit()
+	var asphalt_mat := StandardMaterial3D.new()
+	asphalt_mat.albedo_color = Color(0.18, 0.18, 0.20)
+	asphalt_mat.roughness = 0.85
+	asphalt_inst.material_override = asphalt_mat
+	add_child(asphalt_inst)
 
-	var road_inst := MultiMeshInstance3D.new()
-	road_inst.multimesh = road_multi
-	var road_mat := StandardMaterial3D.new()
-	road_mat.albedo_color = Color(0.18, 0.18, 0.20)
-	road_mat.roughness = 0.85
-	road_inst.material_override = road_mat
-	add_child(road_inst)
-
-	# Dashed center line — same treatment, slightly above the asphalt.
-	var num_dashes := int(DASH_COVERAGE / DASH_PERIOD)
-	var dashes := MultiMesh.new()
-	dashes.transform_format = MultiMesh.TRANSFORM_3D
-	dashes.instance_count = num_dashes
-	var dash_mesh := PlaneMesh.new()
-	dash_mesh.size = Vector2(LINE_WIDTH, DASH_LENGTH)
-	dashes.mesh = dash_mesh
+	# Dashed centre line — short rectangles laid along the path tangent
+	# at regular distance intervals.
+	var dashes := SurfaceTool.new()
+	dashes.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var dash_half_w := LINE_WIDTH * 0.5
+	var dash_half_l := DASH_LENGTH * 0.5
+	var dash_lift := Vector3(0, 0.07, 0)
+	var total_len: float = float(current_course.get("length_m", 0.0))
+	if total_len <= 0.0 and _course_path.size() > 0:
+		total_len = float(_course_path[-1]["distance_m"])
+	var num_dashes := int(total_len / DASH_PERIOD)
 	for i in num_dashes:
-		var d_mid: float = float(i) * DASH_PERIOD + DASH_LENGTH * 0.5
-		var y_mid := _elevation_at_distance(d_mid)
-		var grade := _gradient_at_distance(d_mid)
-		var pitch := atan(grade)
-		var basis := Basis().rotated(Vector3.RIGHT, pitch)
-		var origin := Vector3(0.0, y_mid + 0.02, -d_mid)
-		dashes.set_instance_transform(i, Transform3D(basis, origin))
-
-	var dashes_inst := MultiMeshInstance3D.new()
-	dashes_inst.multimesh = dashes
+		var d_mid: float = float(i) * DASH_PERIOD + dash_half_l
+		var center := _position_at_distance(d_mid) + dash_lift
+		var tng := _tangent_at_distance(d_mid)
+		var right := Vector3(-tng.z, 0, tng.x)
+		var ahead := tng * dash_half_l
+		var fl := center + ahead - right * dash_half_w
+		var fr := center + ahead + right * dash_half_w
+		var br := center - ahead + right * dash_half_w
+		var bl := center - ahead - right * dash_half_w
+		dashes.add_vertex(bl)
+		dashes.add_vertex(fl)
+		dashes.add_vertex(br)
+		dashes.add_vertex(br)
+		dashes.add_vertex(fl)
+		dashes.add_vertex(fr)
+	dashes.generate_normals()
+	var dash_inst := MeshInstance3D.new()
+	dash_inst.mesh = dashes.commit()
 	var dash_mat := StandardMaterial3D.new()
 	dash_mat.albedo_color = Color(0.92, 0.92, 0.78)
-	dashes_inst.material_override = dash_mat
-	add_child(dashes_inst)
+	dash_inst.material_override = dash_mat
+	add_child(dash_inst)
 
 
 func _setup_markers() -> void:
-	const MARKER_COUNT := 100  # markers up to 10km
 	const SPACING_M := 100.0
 	const SIDE_OFFSET := 3.2
+	if _course_path.size() < 2:
+		return
+	var total_len: float = float(current_course.get("length_m", 0.0))
+	if total_len <= 0.0:
+		total_len = float(_course_path[-1]["distance_m"])
+	var marker_count := int(total_len / SPACING_M)
 
 	var post_mesh := CylinderMesh.new()
 	post_mesh.height = 1.4
 	post_mesh.top_radius = 0.08
 	post_mesh.bottom_radius = 0.08
-
 	var km_mesh := CylinderMesh.new()
 	km_mesh.height = 2.4
 	km_mesh.top_radius = 0.12
 	km_mesh.bottom_radius = 0.12
-
 	var post_mat := StandardMaterial3D.new()
 	post_mat.albedo_color = Color(0.95, 0.95, 0.95)
-
 	var km_mat := StandardMaterial3D.new()
 	km_mat.albedo_color = Color(0.85, 0.25, 0.15)
 
-	for i in range(1, MARKER_COUNT + 1):
-		var distance := i * SPACING_M
-		var elev := _elevation_at_distance(distance)
-		var is_km := (i % 10) == 0
+	for i in range(1, marker_count + 1):
+		var distance: float = float(i) * SPACING_M
+		var center := _position_at_distance(distance)
+		var tng := _tangent_at_distance(distance)
+		var right := Vector3(-tng.z, 0, tng.x)
+		var is_km: bool = (i % 10) == 0
 		for side in [-1.0, 1.0]:
 			var post := MeshInstance3D.new()
 			post.mesh = km_mesh if is_km else post_mesh
 			post.material_override = km_mat if is_km else post_mat
-			var height := (km_mesh.height if is_km else post_mesh.height) as float
-			post.position = Vector3(side * SIDE_OFFSET, elev + height * 0.5, -distance)
+			var height: float = km_mesh.height if is_km else post_mesh.height
+			# Add to the tree before assigning global_position so Godot
+			# can resolve the world transform without warning.
 			add_child(post)
+			post.global_position = (
+				center + right * (side * SIDE_OFFSET) + Vector3(0, height * 0.5, 0)
+			)
 
 
 func _setup_scenery() -> void:
-	# Trees: cone meshes scattered randomly beside the road. Single MultiMesh
-	# instance so all trees share one draw call. Per-instance color varies
-	# the greens slightly. Seed is fixed so the layout is reproducible.
-	# Y matches the road elevation so trees plant on the hillside, not under
-	# or above the road as it rises.
-	const TREE_COUNT := 250
-	const MIN_SIDE_DIST := 6.0
-	const MAX_SIDE_DIST := 60.0
-	const Z_COVERAGE := 9500.0
+	# Trees scattered inside the bounding box of the path, rejecting any
+	# candidate too close to the road centerline. Single MultiMesh = one
+	# draw call. POC: trees sit on the flat ground plane (y=0); a future
+	# terrain pass will lift them to the local ground height.
+	const TREE_COUNT := 300
+	const PADDING := 80.0
+	const MIN_DIST_TO_ROAD := 6.0
+	if _course_path.size() < 2:
+		return
+
+	# Bounding box of the path in world XZ.
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for p in _course_path:
+		var px := float(p["x_m"])
+		var pz := -float(p["y_m"])
+		if px < min_x: min_x = px
+		if px > max_x: max_x = px
+		if pz < min_z: min_z = pz
+		if pz > max_z: max_z = pz
+	min_x -= PADDING
+	max_x += PADDING
+	min_z -= PADDING
+	max_z += PADDING
 
 	var trees := MultiMesh.new()
 	trees.transform_format = MultiMesh.TRANSFORM_3D
@@ -362,20 +534,41 @@ func _setup_scenery() -> void:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xB1CE_F00D
+	var min_d2_threshold := MIN_DIST_TO_ROAD * MIN_DIST_TO_ROAD
 
-	for i in TREE_COUNT:
-		var side: float = -1.0 if rng.randf() < 0.5 else 1.0
-		var x_dist: float = rng.randf_range(MIN_SIDE_DIST, MAX_SIDE_DIST) * side
-		var distance: float = rng.randf_range(20.0, Z_COVERAGE)
-		var s: float = rng.randf_range(0.7, 1.4)
-		var elev := _elevation_at_distance(distance)
-
+	var placed := 0
+	var attempts := 0
+	while placed < TREE_COUNT and attempts < TREE_COUNT * 8:
+		attempts += 1
+		var x := rng.randf_range(min_x, max_x)
+		var z := rng.randf_range(min_z, max_z)
+		# Nearest-point linear scan. Also returns the nearest path point's
+		# elevation so we can sit the tree on the ground strip instead of
+		# the y=0 fallback plane.
+		var min_d2 := INF
+		var nearest_ele := 0.0
+		for p in _course_path:
+			var dx := float(p["x_m"]) - x
+			var dz := -float(p["y_m"]) - z
+			var d2 := dx * dx + dz * dz
+			if d2 < min_d2:
+				min_d2 = d2
+				nearest_ele = float(p["elevation_m"])
+				if min_d2 < min_d2_threshold:
+					break
+		if min_d2 < min_d2_threshold:
+			continue
+		var s := rng.randf_range(0.7, 1.4)
 		var basis := Basis().scaled(Vector3.ONE * s)
-		var origin := Vector3(x_dist, elev + tree_mesh.height * 0.5 * s, -distance)
-		trees.set_instance_transform(i, Transform3D(basis, origin))
+		var origin := Vector3(x, nearest_ele + tree_mesh.height * 0.5 * s, z)
+		trees.set_instance_transform(placed, Transform3D(basis, origin))
+		var g := rng.randf_range(0.30, 0.50)
+		trees.set_instance_color(placed, Color(0.10, g, 0.12))
+		placed += 1
 
-		var g: float = rng.randf_range(0.30, 0.50)
-		trees.set_instance_color(i, Color(0.10, g, 0.12))
+	# Collapse unused slots so we don't draw stray trees at origin.
+	for i in range(placed, TREE_COUNT):
+		trees.set_instance_transform(i, Transform3D().scaled(Vector3.ZERO))
 
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = trees
@@ -683,9 +876,11 @@ func _setup_start_line() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(1.0, 1.0, 1.0)
 	line.material_override = mat
-	# Just in front of the rider's spawn (rider sits at z=0; line at z=-1).
-	line.position = Vector3(0.0, _elevation_at_distance(1.0) + 0.03, -1.0)
+	# 1 m ahead of distance=0 on the path, lined up with the road tangent.
+	var center := _position_at_distance(1.0) + Vector3(0, 0.08, 0)
 	add_child(line)
+	line.global_position = center
+	line.rotation.y = _heading_at_distance(1.0)
 	_start_line_node = line
 
 
@@ -736,8 +931,10 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ESCAPE:
 			_finish_ride()
 		elif event.keycode == KEY_T:
+			# Reverse direction along the path. The rider's rotation is
+			# rebuilt every frame in _physics_process from the tangent,
+			# so we just flip the heading state here.
 			heading = -heading
-			rider_node.rotation.y = 0.0 if heading == 1 else PI
 
 
 func _process(delta: float) -> void:
@@ -756,12 +953,9 @@ func _physics_process(delta: float) -> void:
 	if not is_riding:
 		return
 
-	# Course position is derived from the rider's world Z (start = 0, forward
-	# travel makes Z negative). The raw gradient is signed by course
-	# direction; flip when the rider has turned around so going "backwards
-	# up the hill" reads as a descent.
-	var course_pos := -rider_node.global_position.z
-	var raw_grade := _gradient_at_distance(course_pos)
+	# Distance-along-path drives everything. Gradient is signed by course
+	# direction so "backwards up the hill" reads as a descent.
+	var raw_grade := _gradient_at_distance(distance_m)
 	var gradient := raw_grade * float(heading) if is_racing else 0.0
 	var draft_mult := _compute_draft_multiplier()
 	if is_racing:
@@ -770,36 +964,35 @@ func _physics_process(delta: float) -> void:
 		)
 		if velocity_mps > peak_speed_mps:
 			peak_speed_mps = velocity_mps
-		distance_m += velocity_mps * delta
+		distance_m += velocity_mps * delta * float(heading)
 		elapsed_s += delta
 	else:
-		# Pen: bike is held, so even with power applied no actual speed.
+		# Pen: bike is held; even with power applied no real forward speed.
 		velocity_mps = 0.0
 
-	# Lateral steering input (rider's local frame: +X is rider's right).
-	var local_dx := 0.0
+	# Lateral steering: input is in the rider's frame (left/right relative
+	# to forward), so flip when heading is reversed.
+	var lateral_input := 0.0
 	if Input.is_key_pressed(KEY_LEFT):
-		local_dx -= LATERAL_SPEED_MPS * delta
+		lateral_input -= LATERAL_SPEED_MPS * delta
 	if Input.is_key_pressed(KEY_RIGHT):
-		local_dx += LATERAL_SPEED_MPS * delta
+		lateral_input += LATERAL_SPEED_MPS * delta
+	_lateral_offset += lateral_input * float(heading)
+	if _lateral_offset > ROAD_HALF_WIDTH_M:
+		_lateral_offset = ROAD_HALF_WIDTH_M
+	elif _lateral_offset < -ROAD_HALF_WIDTH_M:
+		_lateral_offset = -ROAD_HALF_WIDTH_M
 
-	if is_racing:
-		# Forward = local -Z; rider_node's rotation handles turn-around.
-		rider_node.translate(Vector3(local_dx, 0.0, -velocity_mps * delta))
-	else:
-		# Pen mode: lateral allowed, forward motion locked to z=0.
-		rider_node.translate(Vector3(local_dx, 0.0, 0.0))
-		rider_node.global_position.z = 0.0
-
-	# Soft clamp: keep the rider on the road (road runs along world Z).
-	var world_x := rider_node.global_position.x
-	if world_x > ROAD_HALF_WIDTH_M:
-		rider_node.global_position.x = ROAD_HALF_WIDTH_M
-	elif world_x < -ROAD_HALF_WIDTH_M:
-		rider_node.global_position.x = -ROAD_HALF_WIDTH_M
-
-	# Plant the rider on the road surface.
-	rider_node.global_position.y = _elevation_at_distance(-rider_node.global_position.z)
+	# Place + orient the rider from the path. center is the road centerline
+	# at this distance; right is the perpendicular world XZ vector.
+	var center := _position_at_distance(distance_m)
+	var tng := _tangent_at_distance(distance_m)
+	var right := Vector3(-tng.z, 0, tng.x)
+	rider_node.global_position = center + right * _lateral_offset
+	var face_y := _heading_at_distance(distance_m)
+	if heading == -1:
+		face_y += PI
+	rider_node.rotation.y = face_y
 
 	_sample_accum_s += delta
 	var sample_dt := 1.0 / SAMPLE_HZ
@@ -913,30 +1106,22 @@ func _compute_draft_multiplier() -> float:
 	return 1.0 - best_savings * DRAFT_FULL_REDUCTION * global_factor
 
 
-# --- Course profile lookup (gradient at distance, looping) ---
+# --- Course profile lookup ---
 
 func _gradient_at_distance(d: float) -> float:
-	if current_course.is_empty():
+	# Derived from the path's per-segment elevation delta. Falls through
+	# to 0.0 when the path isn't ready or has only one waypoint.
+	if _course_path.size() < 2:
 		return 0.0
-	var profile: Array = current_course["elevation_profile"]
-	if profile.size() < 2:
+	var dd := _wrap_distance(d)
+	var i := _find_path_segment(dd)
+	var p0: Dictionary = _course_path[i]
+	var p1: Dictionary = _course_path[i + 1]
+	var de := float(p1["elevation_m"]) - float(p0["elevation_m"])
+	var ddist := float(p1["distance_m"]) - float(p0["distance_m"])
+	if ddist <= 0.0:
 		return 0.0
-
-	var length := float(current_course["length_m"])
-	if length > 0.0:
-		d = fposmod(d, length)
-
-	for i in range(profile.size() - 1):
-		var p0: Dictionary = profile[i]
-		var p1: Dictionary = profile[i + 1]
-		var d0 := float(p0["distance_m"])
-		var d1 := float(p1["distance_m"])
-		if d >= d0 and d <= d1:
-			if d1 <= d0:
-				return float(p0["gradient"])
-			var t := (d - d0) / (d1 - d0)
-			return lerpf(float(p0["gradient"]), float(p1["gradient"]), t)
-	return 0.0
+	return de / ddist
 
 
 # --- Sample flush + finish ---
@@ -1116,50 +1301,50 @@ func _on_welcome(riders: Array) -> void:
 			_record_ghost_state(rid, state, true)
 
 
-func _on_rider_joined(rider_id: String, display_name: String, bib_number: int) -> void:
-	if rider_id.is_empty():
+func _on_rider_joined(rid: String, display_name: String, bib_number: int) -> void:
+	if rid.is_empty():
 		return
-	_spawn_ghost(rider_id, display_name, bib_number)
+	_spawn_ghost(rid, display_name, bib_number)
 
 
-func _on_rider_left(rider_id: String) -> void:
-	if _ghosts.has(rider_id):
-		_ghosts[rider_id].queue_free()
-		_ghosts.erase(rider_id)
-	_ghost_targets.erase(rider_id)
-	_ghost_names.erase(rider_id)
-	_ghost_bibs.erase(rider_id)
-	_ghost_distances.erase(rider_id)
+func _on_rider_left(rid: String) -> void:
+	if _ghosts.has(rid):
+		_ghosts[rid].queue_free()
+		_ghosts.erase(rid)
+	_ghost_targets.erase(rid)
+	_ghost_names.erase(rid)
+	_ghost_bibs.erase(rid)
+	_ghost_distances.erase(rid)
 
 
-func _on_rider_state(rider_id: String, state: Dictionary) -> void:
-	if not _ghosts.has(rider_id):
-		_spawn_ghost(rider_id, "", 0)
+func _on_rider_state(rid: String, state: Dictionary) -> void:
+	if not _ghosts.has(rid):
+		_spawn_ghost(rid, "", 0)
 	# First state for this ghost: snap into place (avoids a visible slide
 	# from world origin). Subsequent states only update the target; _process
 	# lerps the visual node toward it.
-	var snap := not _ghost_targets.has(rider_id)
-	_record_ghost_state(rider_id, state, snap)
+	var snap := not _ghost_targets.has(rid)
+	_record_ghost_state(rid, state, snap)
 
 
-func _spawn_ghost(rider_id: String, display_name: String = "", bib: int = 0) -> void:
-	if _ghosts.has(rider_id):
+func _spawn_ghost(rid: String, display_name: String = "", bib: int = 0) -> void:
+	if _ghosts.has(rid):
 		# Already spawned — just update name/bib if newly provided.
 		if not display_name.is_empty():
-			_ghost_names[rider_id] = display_name
-		if bib > 0 and int(_ghost_bibs.get(rider_id, 0)) == 0:
-			_ghost_bibs[rider_id] = bib
-			_add_bib_label(_ghosts[rider_id], bib, GHOST_COLOR)
+			_ghost_names[rid] = display_name
+		if bib > 0 and int(_ghost_bibs.get(rid, 0)) == 0:
+			_ghost_bibs[rid] = bib
+			_add_bib_label(_ghosts[rid], bib, GHOST_COLOR)
 		return
 	var ghost := Node3D.new()
-	ghost.name = "Ghost_%s" % rider_id
+	ghost.name = "Ghost_%s" % rid
 	ghost.add_child(_build_rider_visual(GHOST_COLOR))
 	add_child(ghost)
-	_ghosts[rider_id] = ghost
+	_ghosts[rid] = ghost
 	if not display_name.is_empty():
-		_ghost_names[rider_id] = display_name
+		_ghost_names[rid] = display_name
 	if bib > 0:
-		_ghost_bibs[rider_id] = bib
+		_ghost_bibs[rid] = bib
 		_add_bib_label(ghost, bib, GHOST_COLOR)
 
 
@@ -1179,24 +1364,24 @@ func _add_bib_label(parent: Node3D, number: int, jersey: Color) -> void:
 	parent.add_child(label)
 
 
-func _record_ghost_state(rider_id: String, state: Dictionary, snap: bool) -> void:
-	if not _ghosts.has(rider_id):
+func _record_ghost_state(rid: String, state: Dictionary, snap: bool) -> void:
+	if not _ghosts.has(rid):
 		return
 	var pos := Vector3(float(state.get("x", 0.0)), 0.0, float(state.get("z", 0.0)))
 	var h: int = int(state.get("heading", 1))
 	var speed: float = float(state.get("speed_mps", 0.0))
 	var velocity := Vector3(0.0, 0.0, speed * (-1.0 if h == 1 else 1.0))
 	var yaw: float = 0.0 if h == 1 else PI
-	_ghost_targets[rider_id] = {
+	_ghost_targets[rid] = {
 		"pos": pos,
 		"velocity": velocity,
 		"yaw": yaw,
 		"t_ms": Time.get_ticks_msec(),
 	}
 	if state.has("distance_m"):
-		_ghost_distances[rider_id] = float(state["distance_m"])
+		_ghost_distances[rid] = float(state["distance_m"])
 	if snap:
-		var ghost: Node3D = _ghosts[rider_id]
+		var ghost: Node3D = _ghosts[rid]
 		ghost.global_position = Vector3(pos.x, _elevation_at_distance(-pos.z), pos.z)
 		ghost.rotation.y = yaw
 
