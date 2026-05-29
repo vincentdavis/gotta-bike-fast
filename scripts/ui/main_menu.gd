@@ -83,6 +83,9 @@ func _on_create_pressed() -> void:
 	add_child(picker)
 	var chosen: Dictionary = await picker.pick(courses)
 	picker.queue_free()
+	if chosen.is_empty():
+		_set_busy(false, "")
+		return
 
 	var cd_picker := CountdownPicker.new()
 	add_child(cd_picker)

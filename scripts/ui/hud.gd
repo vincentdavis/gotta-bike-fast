@@ -11,6 +11,10 @@ extends CanvasLayer
 @onready var status_label: Label = $VBox/StatusLabel
 @onready var countdown_label: Label = $CountdownLabel
 @onready var leaderboard_list: VBoxContainer = $LeaderboardPanel/Margin/VBox/List
+@onready var minimap_panel: PanelContainer = $MinimapPanel
+@onready var minimap_box: Control = $MinimapPanel/Margin/VBox/MapBox
+@onready var minimap_rect: TextureRect = $MinimapPanel/Margin/VBox/MapBox/MinimapRect
+@onready var minimap_marker: ColorRect = $MinimapPanel/Margin/VBox/MapBox/RiderMarker
 
 
 func set_power(w: float) -> void:
@@ -71,6 +75,47 @@ func show_countdown(seconds_remaining: float) -> void:
 
 func hide_countdown() -> void:
 	countdown_label.text = ""
+
+
+func set_minimap_texture(tex: Texture2D) -> void:
+	if tex == null:
+		minimap_panel.visible = false
+		minimap_rect.texture = null
+		return
+	minimap_rect.texture = tex
+	minimap_panel.visible = true
+	minimap_marker.visible = false
+
+
+func set_minimap_uv(u: float, v: float) -> void:
+	# Position the rider marker over the displayed image. With
+	# STRETCH_KEEP_ASPECT_CENTERED the image is letterboxed inside the
+	# TextureRect — compute that sub-rect so the marker lands on the
+	# actual map, not the empty letterbox.
+	if minimap_rect.texture == null:
+		return
+	var tex_size: Vector2 = minimap_rect.texture.get_size()
+	if tex_size.x <= 0.0 or tex_size.y <= 0.0:
+		return
+	var rect_size: Vector2 = minimap_rect.size
+	if rect_size.x <= 0.0 or rect_size.y <= 0.0:
+		return
+	var scale: float = min(rect_size.x / tex_size.x, rect_size.y / tex_size.y)
+	var img_w: float = tex_size.x * scale
+	var img_h: float = tex_size.y * scale
+	var img_x: float = (rect_size.x - img_w) * 0.5
+	var img_y: float = (rect_size.y - img_h) * 0.5
+	var px: float = img_x + clamp(u, 0.0, 1.0) * img_w
+	var py: float = img_y + clamp(v, 0.0, 1.0) * img_h
+	var half := minimap_marker.size * 0.5
+	minimap_marker.position = Vector2(px - half.x, py - half.y)
+	minimap_marker.visible = true
+
+
+func hide_minimap() -> void:
+	minimap_panel.visible = false
+	minimap_rect.texture = null
+	minimap_marker.visible = false
 
 
 func set_leaderboard(entries: Array) -> void:

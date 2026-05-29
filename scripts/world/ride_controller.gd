@@ -85,6 +85,38 @@ var _waypoint_rights: Array = []
 # global_position.x in the old straight-road world.
 var _lateral_offset: float = 0.0
 
+# Heightmap of the terrain around the route. Populated asynchronously
+# by _setup_terrain_async after fetching the PNG from the web app.
+# Empty for synthetic / loop courses where no heightmap is provided.
+var _terrain_inst: MeshInstance3D = null
+var _terrain_heights: Array = []  # row-major float, size = width * height
+var _terrain_width: int = 0
+var _terrain_height: int = 0
+var _terrain_grid_m: float = 0.0
+var _terrain_origin_x_m: float = 0.0
+var _terrain_origin_y_m: float = 0.0
+var _terrain_min_ele: float = 0.0
+var _terrain_max_ele: float = 0.0
+
+# Topo minimap (in-ride). Loaded async; once present we project the rider
+# position into image UV every physics tick so the HUD marker tracks them.
+# Reuses the heightmap_* meta from the course (same origin / grid / extent).
+var _topo_loaded: bool = false
+
+# Flat 12 km × 12 km ground plane used as a backdrop for synthetic / loop
+# courses. Tracked so we can hide it once the heightmap terrain arrives —
+# otherwise the two co-planar surfaces z-fight and produce flickering
+# black bands in the rider's view (visible whenever the heightmap min
+# elevation lands close to y=0, which it always does after normalization).
+var _ground_inst: MeshInstance3D = null
+
+# Wide path-following green ribbon built synchronously in
+# _build_course_visuals as a bridge between the road and the flat
+# ground while the heightmap terrain is still fetching. Hidden once the
+# real terrain arrives — at that point it would just z-fight with the
+# terrain (both surfaces driven by the same elevations).
+var _ground_strip_inst: MeshInstance3D = null
+
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
 
@@ -143,6 +175,12 @@ func _setup_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	# Distance fog hides the hard edge of the heightmap mesh and softens
+	# the far-distance LOD. Light blue-grey so it matches a hazy sky.
+	env.fog_enabled = true
+	env.fog_density = 0.0015
+	env.fog_light_color = Color(0.65, 0.72, 0.80)
+	env.fog_aerial_perspective = 0.4
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -178,18 +216,221 @@ func _setup_ground() -> void:
 	mat.roughness = 1.0
 	ground.material_override = mat
 	add_child(ground)
+	_ground_inst = ground
 
 
 func _build_course_visuals() -> void:
-	# Course-dependent visuals: ground strip, road, markers, scenery — all
-	# built from the course path (curved when the server provides one;
-	# otherwise synthesized straight from elevation_profile).
+	# Course-dependent visuals: ground strip, road, markers, scenery —
+	# all built from the course path. Terrain (when the server provides
+	# a heightmap) is fetched asynchronously and added when it arrives
+	# so the ride can start without waiting on the download.
+	#
+	# We always build the path-following ground strip + scenery first.
+	# When a heightmap eventually arrives, it overlays the wider area
+	# beyond the strip; the strip remains a guaranteed "the road sits
+	# on something" backdrop. This way the road never visibly floats
+	# even if the heightmap fetch is slow, fails, or was missing from
+	# the upload entirely.
 	_compute_course_path()
 	_compute_waypoint_frames()
 	_setup_ground_strip()
 	_setup_road()
 	_setup_markers()
 	_setup_scenery()
+	# Async terrain fetch — populates _terrain_heights + adds the mesh
+	# beside the strip when it arrives. Re-places scenery onto the
+	# heightmap once it does.
+	if not str(current_course.get("heightmap_url", "")).is_empty():
+		_setup_terrain_async()
+	# Async topo PNG fetch for the in-ride minimap. Independent of the
+	# heightmap fetch; either can fail without affecting the other.
+	if not str(current_course.get("topo_map_url", "")).is_empty():
+		_setup_minimap_async()
+
+
+func _setup_terrain_async() -> void:
+	var url: String = str(current_course.get("heightmap_url", ""))
+	if url.is_empty():
+		return  # synthetic / loop courses or upload failed — flat backdrop only
+	var w: int = int(current_course.get("heightmap_width", 0))
+	var h: int = int(current_course.get("heightmap_height", 0))
+	if w < 2 or h < 2:
+		return
+	_terrain_width = w
+	_terrain_height = h
+	_terrain_grid_m = float(current_course.get("heightmap_grid_spacing_m", 0.0))
+	_terrain_origin_x_m = float(current_course.get("heightmap_origin_x_m", 0.0))
+	_terrain_origin_y_m = float(current_course.get("heightmap_origin_y_m", 0.0))
+	_terrain_min_ele = float(current_course.get("heightmap_min_elevation_m", 0.0))
+	_terrain_max_ele = float(current_course.get("heightmap_max_elevation_m", 0.0))
+
+	var http := HTTPRequest.new()
+	add_child(http)
+	var err := http.request(url)
+	if err != OK:
+		push_warning("Heightmap fetch dispatch failed: %s" % err)
+		http.queue_free()
+		return
+	var result: Array = await http.request_completed
+	http.queue_free()
+	var transport: int = result[0]
+	var code: int = result[1]
+	var body: PackedByteArray = result[3]
+	if transport != HTTPRequest.RESULT_SUCCESS or code < 200 or code >= 300:
+		push_warning("Heightmap fetch failed: code=%s" % code)
+		return
+
+	var img := Image.new()
+	var png_err := img.load_png_from_buffer(body)
+	if png_err != OK:
+		push_warning("Heightmap PNG decode failed: %s" % png_err)
+		return
+	if img.get_width() != w or img.get_height() != h:
+		push_warning(
+			"Heightmap dimensions mismatch: png=%dx%d expected=%dx%d"
+			% [img.get_width(), img.get_height(), w, h]
+		)
+		return
+
+	# Decode pixel values into world elevations. Color.r is in [0, 1]
+	# regardless of the source PNG's bit depth, so this works whether
+	# Godot loaded the 16-bit PNG as 16-bit or downconverted to 8-bit.
+	var range_m: float = _terrain_max_ele - _terrain_min_ele
+	_terrain_heights.resize(w * h)
+	for y in h:
+		for x in w:
+			var c := img.get_pixel(x, y)
+			_terrain_heights[y * w + x] = _terrain_min_ele + c.r * range_m
+
+	if not is_inside_tree():
+		return
+	_build_terrain_mesh()
+	# Hide the flat backdrop ground now that the heightmap mesh covers
+	# everything visible. Leaving it on causes z-fighting wherever the
+	# heightmap dips near its normalized 0-m minimum (the flat plane is
+	# at exactly y=0), which manifests as the flickering black bands the
+	# rider sees beside the road on real GPX courses.
+	if _ground_inst != null:
+		_ground_inst.visible = false
+	# The path-following ground strip is now redundant — the terrain
+	# mesh covers the same area at the same elevations. Hiding it avoids
+	# a second co-planar z-fight near the road shoulder.
+	if _ground_strip_inst != null:
+		_ground_strip_inst.visible = false
+	# Re-place scenery onto the heightmap. The initial pass in
+	# _build_course_visuals used path-elevation fallbacks; now that the
+	# terrain heights are known, scatter trees onto the real surface.
+	# Existing tree MultiMeshInstance3D nodes are cleared so we don't
+	# end up with two overlapping forests.
+	_clear_existing_scenery()
+	_setup_scenery()
+
+
+func _setup_minimap_async() -> void:
+	# Fetch the course's topo PNG and hand it to the HUD. The map's
+	# world↔pixel projection reuses heightmap_* fields (origin, grid,
+	# width, height). If those are missing we still display the topo
+	# but can't place the rider marker — set_minimap_uv would no-op.
+	var url: String = str(current_course.get("topo_map_url", ""))
+	if url.is_empty():
+		return
+	var http := HTTPRequest.new()
+	add_child(http)
+	var err := http.request(url)
+	if err != OK:
+		push_warning("Topo map fetch dispatch failed: %s" % err)
+		http.queue_free()
+		return
+	var result: Array = await http.request_completed
+	http.queue_free()
+	var transport: int = result[0]
+	var code: int = result[1]
+	if transport != HTTPRequest.RESULT_SUCCESS or code < 200 or code >= 300:
+		push_warning("Topo map fetch failed: code=%s" % code)
+		return
+	var img := Image.new()
+	var png_err := img.load_png_from_buffer(result[3])
+	if png_err != OK:
+		push_warning("Topo map PNG decode failed: %s" % png_err)
+		return
+	if not is_inside_tree():
+		return
+	hud.set_minimap_texture(ImageTexture.create_from_image(img))
+	_topo_loaded = true
+
+
+func _clear_existing_scenery() -> void:
+	# Find prior MultiMeshInstance3D children (the tree forest from the
+	# first scenery pass) and remove them. Identified by the unique
+	# MultiMesh resource used in _setup_scenery; fall back to checking
+	# child type if needed.
+	for child in get_children():
+		if child is MultiMeshInstance3D:
+			child.queue_free()
+
+
+func _build_terrain_mesh() -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var w := _terrain_width
+	var h := _terrain_height
+	var g := _terrain_grid_m
+	var ox := _terrain_origin_x_m
+	var oy := _terrain_origin_y_m
+	# Pre-compute vertex world positions for every cell.
+	var verts: Array = []
+	verts.resize(w * h)
+	for y in h:
+		for x in w:
+			var wx: float = ox + float(x) * g
+			var wy: float = oy + float(y) * g
+			var ele: float = _terrain_heights[y * w + x]
+			verts[y * w + x] = Vector3(wx, ele, -wy)
+	# Emit one quad per cell as two triangles. CCW from above for +Y normals.
+	for y in range(h - 1):
+		for x in range(w - 1):
+			var v00: Vector3 = verts[y * w + x]
+			var v10: Vector3 = verts[y * w + (x + 1)]
+			var v01: Vector3 = verts[(y + 1) * w + x]
+			var v11: Vector3 = verts[(y + 1) * w + (x + 1)]
+			st.add_vertex(v00); st.add_vertex(v10); st.add_vertex(v01)
+			st.add_vertex(v10); st.add_vertex(v11); st.add_vertex(v01)
+	st.generate_normals()
+
+	var inst := MeshInstance3D.new()
+	inst.mesh = st.commit()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.30, 0.45, 0.25)
+	mat.roughness = 1.0
+	inst.material_override = mat
+	add_child(inst)
+	_terrain_inst = inst
+
+
+func _terrain_height_at(world_x: float, world_z: float) -> float:
+	# Bilinear sample. World Z = -y_m in the path's local frame, so
+	# convert before indexing the grid. Returns 0 (the fallback flat
+	# plane's height) when no heightmap is loaded yet — the ride can
+	# start before the PNG download completes.
+	if _terrain_width < 2 or _terrain_grid_m <= 0.0:
+		return 0.0
+	var local_y_m: float = -world_z
+	var fx: float = (world_x - _terrain_origin_x_m) / _terrain_grid_m
+	var fy: float = (local_y_m - _terrain_origin_y_m) / _terrain_grid_m
+	fx = clampf(fx, 0.0, float(_terrain_width) - 1.0001)
+	fy = clampf(fy, 0.0, float(_terrain_height) - 1.0001)
+	var ix := int(fx)
+	var iy := int(fy)
+	var tx: float = fx - float(ix)
+	var ty: float = fy - float(iy)
+	var w := _terrain_width
+	var e00: float = _terrain_heights[iy * w + ix]
+	var e10: float = _terrain_heights[iy * w + (ix + 1)]
+	var e01: float = _terrain_heights[(iy + 1) * w + ix]
+	var e11: float = _terrain_heights[(iy + 1) * w + (ix + 1)]
+	var a: float = e00 + (e10 - e00) * tx
+	var b: float = e01 + (e11 - e01) * tx
+	return a + (b - a) * ty
 
 
 func _compute_waypoint_frames() -> void:
@@ -259,6 +500,7 @@ func _setup_ground_strip() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	inst.material_override = mat
 	add_child(inst)
+	_ground_strip_inst = inst
 
 
 func _compute_course_path() -> void:
@@ -592,7 +834,13 @@ func _setup_scenery() -> void:
 			continue
 		var s := rng.randf_range(0.7, 1.4)
 		var basis := Basis().scaled(Vector3.ONE * s)
-		var origin := Vector3(x, nearest_ele + tree_mesh.height * 0.5 * s, z)
+		# If a heightmap is loaded, plant the tree on the terrain. Otherwise
+		# fall back to the nearest path waypoint's elevation (POC behaviour
+		# when no heightmap is available).
+		var ground_y: float = nearest_ele
+		if _terrain_width >= 2:
+			ground_y = _terrain_height_at(x, z)
+		var origin := Vector3(x, ground_y + tree_mesh.height * 0.5 * s, z)
 		trees.set_instance_transform(placed, Transform3D(basis, origin))
 		var g := rng.randf_range(0.30, 0.50)
 		trees.set_instance_color(placed, Color(0.10, g, 0.12))
@@ -781,6 +1029,9 @@ func _start_solo() -> void:
 
 	var detail := await _resolve_course()
 	if detail.is_empty():
+		# Picker cancelled or load failed — back to menu.
+		await get_tree().create_timer(0.4).timeout
+		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 		return
 
 	current_course = detail
@@ -896,6 +1147,9 @@ func _resolve_course() -> Dictionary:
 	add_child(picker)
 	var chosen: Dictionary = await picker.pick(courses)
 	picker.queue_free()
+	if chosen.is_empty():
+		hud.set_status("Cancelled")
+		return {}
 	hud.set_status("Loading %s…" % chosen.get("name", "course"))
 	var detail2: Dictionary = await ApiClient.get_course(str(chosen["id"]))
 	if detail2.is_empty():
@@ -1088,6 +1342,19 @@ func _physics_process(delta: float) -> void:
 	hud.set_elapsed(elapsed_s)
 	hud.set_draft(int(round((1.0 - draft_mult) * 100.0)))
 	hud.set_leaderboard(_build_leaderboard())
+
+	# Minimap rider marker. Project XZ → topo UV using the heightmap
+	# meta (the topo PNG covers the same area as the heightmap with
+	# row 0 = north). Only meaningful after the topo PNG has loaded.
+	if _topo_loaded and _terrain_grid_m > 0.0:
+		var rp := rider_node.global_position
+		var world_w_m: float = float(_terrain_width) * _terrain_grid_m
+		var world_h_m: float = float(_terrain_height) * _terrain_grid_m
+		if world_w_m > 0.0 and world_h_m > 0.0:
+			var max_y_m: float = _terrain_origin_y_m + world_h_m
+			var u: float = (rp.x - _terrain_origin_x_m) / world_w_m
+			var v: float = (max_y_m - (-rp.z)) / world_h_m
+			hud.set_minimap_uv(u, v)
 
 	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
 		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
