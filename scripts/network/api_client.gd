@@ -2,13 +2,96 @@ extends Node
 
 signal healthz_received(ok: bool, body: String)
 
-const DEFAULT_BASE_URL := "http://127.0.0.1:8001"
+const DEFAULT_BASE_URL := "http://127.0.0.1:8001"  # FastAPI — live game state
+const DEFAULT_WEB_URL := "http://127.0.0.1:8000"  # Django — accounts + profile
+const AUTH_FILE := "user://auth.cfg"
 
 var base_url: String = DEFAULT_BASE_URL
+var web_url: String = DEFAULT_WEB_URL
+
+var _access_token: String = ""
+var _refresh_token: String = ""
+var user_id: String = ""
 
 
 func _ready() -> void:
+	_load_auth()
 	ping()
+
+
+# --- Auth ---
+
+func is_authenticated() -> bool:
+	return not _access_token.is_empty()
+
+
+func login(email: String, password: String) -> Dictionary:
+	var result: Dictionary = await _do_request(
+		"POST", "/api/auth/login", {"email": email, "password": password}, web_url
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		_set_tokens_from_response(result["json"])
+		return result["json"]
+	return {}
+
+
+func web_signup_url() -> String:
+	return web_url + "/accounts/signup/"
+
+
+func web_password_reset_url() -> String:
+	return web_url + "/accounts/password_reset/"
+
+
+func web_account_url() -> String:
+	return web_url + "/accounts/account/"
+
+
+func logout() -> void:
+	_access_token = ""
+	_refresh_token = ""
+	user_id = ""
+	_save_auth()
+
+
+func get_me() -> Dictionary:
+	var result: Dictionary = await _do_request("GET", "/api/users/me", null, web_url)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func update_me(updates: Dictionary) -> Dictionary:
+	var result: Dictionary = await _do_request("PATCH", "/api/users/me", updates, web_url)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+func _set_tokens_from_response(data: Dictionary) -> void:
+	var tokens: Dictionary = data.get("tokens", {})
+	_access_token = str(tokens.get("access_token", ""))
+	_refresh_token = str(tokens.get("refresh_token", ""))
+	var u: Dictionary = data.get("user", {})
+	user_id = str(u.get("id", ""))
+	_save_auth()
+
+
+func _save_auth() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("auth", "access_token", _access_token)
+	cfg.set_value("auth", "refresh_token", _refresh_token)
+	cfg.set_value("auth", "user_id", user_id)
+	cfg.save(AUTH_FILE)
+
+
+func _load_auth() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(AUTH_FILE) != OK:
+		return
+	_access_token = str(cfg.get_value("auth", "access_token", ""))
+	_refresh_token = str(cfg.get_value("auth", "refresh_token", ""))
+	user_id = str(cfg.get_value("auth", "user_id", ""))
 
 
 # --- Public API ---
@@ -115,6 +198,15 @@ func list_my_games(rider_id: String) -> Array:
 	return []
 
 
+func list_game_results(code: String) -> Array:
+	var result: Dictionary = await _do_request(
+		"GET", "/v1/games/%s/results" % code, null
+	)
+	if result["ok"] and result["json"] is Array:
+		return result["json"]
+	return []
+
+
 func get_game(code: String) -> Dictionary:
 	var result: Dictionary = await _do_request("GET", "/v1/games/" + code, null)
 	if result["ok"] and result["json"] is Dictionary:
@@ -151,7 +243,8 @@ func start_game(code: String, rider_id: String) -> Dictionary:
 
 # --- Internal ---
 
-func _do_request(method: String, path: String, body) -> Dictionary:
+func _do_request(method: String, path: String, body, base: String = "") -> Dictionary:
+	var origin: String = base if not base.is_empty() else base_url
 	var http := HTTPRequest.new()
 	add_child(http)
 
@@ -160,6 +253,8 @@ func _do_request(method: String, path: String, body) -> Dictionary:
 	if body != null:
 		headers.append("Content-Type: application/json")
 		body_str = JSON.stringify(body)
+	if not _access_token.is_empty():
+		headers.append("Authorization: Bearer " + _access_token)
 
 	var http_method: int = HTTPClient.METHOD_GET
 	match method:
@@ -172,9 +267,9 @@ func _do_request(method: String, path: String, body) -> Dictionary:
 		"DELETE":
 			http_method = HTTPClient.METHOD_DELETE
 
-	var err := http.request(base_url + path, headers, http_method, body_str)
+	var err := http.request(origin + path, headers, http_method, body_str)
 	if err != OK:
-		push_error("ApiClient: %s %s dispatch failed err=%s" % [method, path, err])
+		push_error("ApiClient: %s %s dispatch failed err=%s" % [method, origin + path, err])
 		http.queue_free()
 		return {"ok": false, "response_code": 0, "body_text": "", "json": null}
 
