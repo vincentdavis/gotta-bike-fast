@@ -11,6 +11,11 @@ const MAX_POWER_W := 1000.0
 const STARTING_POWER_W := 100.0
 const LATERAL_SPEED_MPS := 3.0
 const ROAD_HALF_WIDTH_M := 2.0  # soft clamp so the rider stays on the road
+# Vertical gap between path elevation and the rider's pivot. Road surface
+# sits at path_elevation + 0.05 (road lift); RIDER_GROUND_CLEARANCE puts
+# the wheel bottoms a hair above that so they don't z-fight on flat road
+# or sink into the surface on steep climbs.
+const RIDER_GROUND_CLEARANCE := 0.07
 const SAMPLE_HZ := 4.0
 const SAMPLE_FLUSH_S := 5.0
 const WORLD_STATE_HZ := 10.0  # outbound multiplayer state rate
@@ -21,6 +26,10 @@ const DRAFT_MAX_LATERAL_M := 2.0
 const DRAFT_FULL_REDUCTION := 0.35  # max CdA savings at perfect draft
 
 var rider_node: Node3D
+# Intermediate node that holds the rider visual + bib label. It pitches
+# with the road grade so the bike rolls along the tilted surface, but the
+# camera (a sibling on rider_node) stays at a fixed look angle.
+var rider_visual_node: Node3D
 var camera: Camera3D
 var hud: CanvasLayer
 
@@ -238,14 +247,16 @@ func _setup_ground_strip() -> void:
 		var rr0 := c0 + r0 * STRIP_HALF_WIDTH
 		var l1 := c1 - r1 * STRIP_HALF_WIDTH
 		var rr1 := c1 + r1 * STRIP_HALF_WIDTH
-		st.add_vertex(l0); st.add_vertex(l1); st.add_vertex(rr0)
-		st.add_vertex(rr0); st.add_vertex(l1); st.add_vertex(rr1)
+		# CCW from above so the surface normal points +Y (up).
+		st.add_vertex(l0); st.add_vertex(rr0); st.add_vertex(l1)
+		st.add_vertex(rr0); st.add_vertex(rr1); st.add_vertex(l1)
 	st.generate_normals()
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.34, 0.55, 0.28)
 	mat.roughness = 1.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	inst.material_override = mat
 	add_child(inst)
 
@@ -256,12 +267,25 @@ func _compute_course_path() -> void:
 		return
 	var raw_path: Array = current_course.get("path", [])
 	if raw_path.size() >= 2:
+		# Normalize elevations: subtract the minimum so the route's lowest
+		# point sits at y=0. GPX exports carry absolute m-above-sea-level
+		# elevations (e.g., 1700 m for a mountain ride). At that magnitude
+		# the rider + road sit way above the flat backdrop ground plane
+		# and the depth buffer can't keep them visually separated.
+		# Synthetic courses (Test Curves) already start at 0; min-shift is a no-op.
+		var min_ele := INF
+		for p in raw_path:
+			var e := float(p["elevation_m"])
+			if e < min_ele:
+				min_ele = e
+		if min_ele == INF:
+			min_ele = 0.0
 		for p in raw_path:
 			_course_path.append({
 				"distance_m": float(p["distance_m"]),
 				"x_m": float(p["x_m"]),
 				"y_m": float(p["y_m"]),
-				"elevation_m": float(p["elevation_m"]),
+				"elevation_m": float(p["elevation_m"]) - min_ele,
 			})
 		return
 
@@ -398,20 +422,26 @@ func _setup_road() -> void:
 		var right0 := pos0 + r0 * half_w
 		var left1 := pos1 - r1 * half_w
 		var right1 := pos1 + r1 * half_w
-		# Two triangles forming the quad. Winding: counter-clockwise when
-		# viewed from above so the normal points +Y.
+		# Two triangles forming the quad. CCW from above so the surface
+		# normal points +Y (up) — visible to a camera looking down at it.
 		asphalt.add_vertex(left0)
-		asphalt.add_vertex(left1)
-		asphalt.add_vertex(right0)
 		asphalt.add_vertex(right0)
 		asphalt.add_vertex(left1)
+		asphalt.add_vertex(right0)
 		asphalt.add_vertex(right1)
+		asphalt.add_vertex(left1)
 	asphalt.generate_normals()
 	var asphalt_inst := MeshInstance3D.new()
 	asphalt_inst.mesh = asphalt.commit()
 	var asphalt_mat := StandardMaterial3D.new()
 	asphalt_mat.albedo_color = Color(0.18, 0.18, 0.20)
 	asphalt_mat.roughness = 0.85
+	# Render both sides so the road is visible whether the camera is above
+	# (normal day looking down a flat road) or below (looking up at a
+	# climbing road ahead). A real road only has one side, but here we
+	# don't have terrain underneath, so the underside being visible costs
+	# nothing visually.
+	asphalt_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	asphalt_inst.material_override = asphalt_mat
 	add_child(asphalt_inst)
 
@@ -436,17 +466,19 @@ func _setup_road() -> void:
 		var fr := center + ahead + right * dash_half_w
 		var br := center - ahead + right * dash_half_w
 		var bl := center - ahead - right * dash_half_w
+		# CCW from above so the dash surface normal points +Y.
 		dashes.add_vertex(bl)
-		dashes.add_vertex(fl)
-		dashes.add_vertex(br)
 		dashes.add_vertex(br)
 		dashes.add_vertex(fl)
+		dashes.add_vertex(br)
 		dashes.add_vertex(fr)
+		dashes.add_vertex(fl)
 	dashes.generate_normals()
 	var dash_inst := MeshInstance3D.new()
 	dash_inst.mesh = dashes.commit()
 	var dash_mat := StandardMaterial3D.new()
 	dash_mat.albedo_color = Color(0.92, 0.92, 0.78)
+	dash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	dash_inst.material_override = dash_mat
 	add_child(dash_inst)
 
@@ -592,7 +624,10 @@ func _setup_rider() -> void:
 	rider_node = Node3D.new()
 	rider_node.name = "Rider"
 	add_child(rider_node)
-	rider_node.add_child(_build_rider_visual(PLAYER_COLOR))
+	rider_visual_node = Node3D.new()
+	rider_visual_node.name = "RiderVisual"
+	rider_node.add_child(rider_visual_node)
+	rider_visual_node.add_child(_build_rider_visual(PLAYER_COLOR))
 
 
 func _build_rider_visual(albedo: Color) -> Node3D:
@@ -815,7 +850,7 @@ func _start_game() -> void:
 			rid, str(p.get("display_name", "")), int(p.get("bib_number", 0))
 		)
 	if _my_bib > 0:
-		_add_bib_label(rider_node, _my_bib, PLAYER_COLOR)
+		_add_bib_label(rider_visual_node, _my_bib, PLAYER_COLOR)
 
 	hud.set_status("Starting ride…")
 	var ride: Dictionary = await ApiClient.start_ride(
@@ -984,15 +1019,24 @@ func _physics_process(delta: float) -> void:
 		_lateral_offset = -ROAD_HALF_WIDTH_M
 
 	# Place + orient the rider from the path. center is the road centerline
-	# at this distance; right is the perpendicular world XZ vector.
+	# at this distance; right is the perpendicular world XZ vector. We
+	# lift the rider above center by RIDER_GROUND_CLEARANCE so the wheels
+	# sit on the road's lifted surface instead of clipping into it.
 	var center := _position_at_distance(distance_m)
 	var tng := _tangent_at_distance(distance_m)
 	var right := Vector3(-tng.z, 0, tng.x)
-	rider_node.global_position = center + right * _lateral_offset
+	rider_node.global_position = (
+		center + right * _lateral_offset + Vector3(0, RIDER_GROUND_CLEARANCE, 0)
+	)
 	var face_y := _heading_at_distance(distance_m)
 	if heading == -1:
 		face_y += PI
 	rider_node.rotation.y = face_y
+	# Pitch only the visual sub-node, not the whole rider_node — the
+	# camera is a child of rider_node and we want it to keep its fixed
+	# look angle. Tilting only the visual means the bike rolls along the
+	# tilted surface without the camera also pitching up on every climb.
+	rider_visual_node.rotation.x = atan(raw_grade * float(heading))
 
 	_sample_accum_s += delta
 	var sample_dt := 1.0 / SAMPLE_HZ
