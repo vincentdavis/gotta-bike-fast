@@ -9,8 +9,8 @@ extends Control
 func _ready() -> void:
 	refresh_button.pressed.connect(_refresh)
 	back_button.pressed.connect(_on_back)
-	if GameSession.rider_id.is_empty():
-		status_label.text = "No rider yet — create or join a game first."
+	if not GameSession.has_rider():
+		status_label.text = "Pick a rider first (Switch Rider on the main menu)."
 		return
 	_refresh()
 
@@ -104,7 +104,9 @@ func _short_time(iso: String) -> String:
 
 func _enter(code: String) -> void:
 	status_label.text = "Re-joining %s…" % code
-	var game: Dictionary = await ApiClient.join_game(code, GameSession.rider_id)
+	var game: Dictionary = await ApiClient.join_game(
+		code, GameSession.rider_id, GameSession.rider_display_name
+	)
 	if game.is_empty():
 		status_label.text = "Could not enter %s" % code
 		return

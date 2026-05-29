@@ -3,7 +3,7 @@ extends Node
 signal healthz_received(ok: bool, body: String)
 
 const DEFAULT_BASE_URL := "http://127.0.0.1:8001"  # FastAPI — live game state
-const DEFAULT_WEB_URL := "http://127.0.0.1:8000"  # Django — accounts + profile
+const DEFAULT_WEB_URL := "http://127.0.0.1:8000"  # Django — accounts + riders + profile
 const AUTH_FILE := "user://auth.cfg"
 
 var base_url: String = DEFAULT_BASE_URL
@@ -47,6 +47,10 @@ func web_account_url() -> String:
 	return web_url + "/accounts/account/"
 
 
+func web_riders_url() -> String:
+	return web_url + "/riders/"
+
+
 func logout() -> void:
 	_access_token = ""
 	_refresh_token = ""
@@ -63,6 +67,24 @@ func get_me() -> Dictionary:
 
 func update_me(updates: Dictionary) -> Dictionary:
 	var result: Dictionary = await _do_request("PATCH", "/api/users/me", updates, web_url)
+	if result["ok"] and result["json"] is Dictionary:
+		return result["json"]
+	return {}
+
+
+# --- Riders (Django-owned; read-only from the game) ---
+
+func list_riders() -> Array:
+	var result: Dictionary = await _do_request("GET", "/api/riders", null, web_url)
+	if result["ok"] and result["json"] is Array:
+		return result["json"]
+	return []
+
+
+func get_rider(rider_id: String) -> Dictionary:
+	var result: Dictionary = await _do_request(
+		"GET", "/api/riders/%s" % rider_id, null, web_url
+	)
 	if result["ok"] and result["json"] is Dictionary:
 		return result["json"]
 	return {}
@@ -118,24 +140,6 @@ func get_course(course_id: String) -> Dictionary:
 	return {}
 
 
-func create_rider(
-	display_name: String, weight_kg: float, height_m: float, ftp_w: int
-) -> Dictionary:
-	var result: Dictionary = await _do_request(
-		"POST",
-		"/v1/riders",
-		{
-			"display_name": display_name,
-			"weight_kg": weight_kg,
-			"height_m": height_m,
-			"ftp_w": ftp_w,
-		},
-	)
-	if result["ok"] and result["json"] is Dictionary:
-		return result["json"]
-	return {}
-
-
 func start_ride(rider_id: String, course_id: String) -> Dictionary:
 	var result: Dictionary = await _do_request(
 		"POST",
@@ -172,12 +176,14 @@ func list_games() -> Array:
 
 func create_game(
 	host_rider_id: String,
+	host_display_name: String,
 	course_id: String,
 	countdown_duration_s: int = 30,
 	scheduled_start_in_s: int = -1,
 ) -> Dictionary:
 	var body: Dictionary = {
 		"host_rider_id": host_rider_id,
+		"host_display_name": host_display_name,
 		"course_id": course_id,
 		"countdown_duration_s": countdown_duration_s,
 	}
@@ -214,9 +220,12 @@ func get_game(code: String) -> Dictionary:
 	return {}
 
 
-func join_game(code: String, rider_id: String) -> Dictionary:
+func join_game(code: String, rider_id: String, display_name: String = "") -> Dictionary:
+	var body: Dictionary = {"rider_id": rider_id}
+	if not display_name.is_empty():
+		body["display_name"] = display_name
 	var result: Dictionary = await _do_request(
-		"POST", "/v1/games/%s/join" % code, {"rider_id": rider_id}
+		"POST", "/v1/games/%s/join" % code, body
 	)
 	if result["ok"] and result["json"] is Dictionary:
 		return result["json"]

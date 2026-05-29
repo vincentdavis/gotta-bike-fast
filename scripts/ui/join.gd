@@ -1,9 +1,5 @@
 extends Control
 
-const DEFAULT_RIDER_NAME := "Anonymous"
-const DEFAULT_RIDER_WEIGHT_KG := 75.0
-const DEFAULT_RIDER_HEIGHT_M := 1.75
-const DEFAULT_RIDER_FTP_W := 200
 const REFRESH_INTERVAL_S := 3.0
 
 @onready var code_input: LineEdit = $Margin/VBox/CodeRow/CodeInput
@@ -111,20 +107,19 @@ func _join_with_code(raw: String) -> void:
 	if code.is_empty():
 		status_label.text = "Enter a valid code"
 		return
+	if not GameSession.has_rider():
+		status_label.text = "Pick a rider first"
+		return
 	status_label.text = "Joining %s…" % code
 
-	var rider_id := await _ensure_rider()
-	if rider_id.is_empty():
-		status_label.text = "Could not create rider"
-		return
-
-	var game: Dictionary = await ApiClient.join_game(code, rider_id)
+	var game: Dictionary = await ApiClient.join_game(
+		code, GameSession.rider_id, GameSession.rider_display_name
+	)
 	if game.is_empty():
 		status_label.text = "Could not join %s" % code
 		return
 
 	GameSession.code = str(game["code"])
-	GameSession.rider_id = rider_id
 	GameSession.host_rider_id = str(game["host_rider_id"])
 	GameSession.course = {
 		"id": str(game["course_id"]),
@@ -152,18 +147,3 @@ func _normalize_code(raw: String) -> String:
 func _on_back_pressed() -> void:
 	_polling = false
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
-
-
-func _ensure_rider() -> String:
-	if not GameSession.rider_id.is_empty():
-		return GameSession.rider_id
-	var rider: Dictionary = await ApiClient.create_rider(
-		DEFAULT_RIDER_NAME,
-		DEFAULT_RIDER_WEIGHT_KG,
-		DEFAULT_RIDER_HEIGHT_M,
-		DEFAULT_RIDER_FTP_W,
-	)
-	if rider.is_empty():
-		return ""
-	GameSession.rider_id = str(rider["id"])
-	return GameSession.rider_id

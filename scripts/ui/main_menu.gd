@@ -1,28 +1,38 @@
 extends Control
 
-const DEFAULT_RIDER_NAME := "Anonymous"
-const DEFAULT_RIDER_WEIGHT_KG := 75.0
-const DEFAULT_RIDER_HEIGHT_M := 1.75
-const DEFAULT_RIDER_FTP_W := 200
-
 @onready var solo_button: Button = $Center/VBox/SoloButton
 @onready var create_button: Button = $Center/VBox/CreateButton
 @onready var join_button: Button = $Center/VBox/JoinButton
 @onready var my_games_button: Button = $Center/VBox/MyGamesButton
+@onready var switch_rider_button: Button = $Center/VBox/SwitchRiderButton
+@onready var settings_button: Button = $Center/VBox/SettingsButton
+@onready var logout_button: Button = $Center/VBox/LogoutButton
 @onready var status_label: Label = $Center/VBox/StatusLabel
+@onready var rider_label: Label = $Center/VBox/RiderLabel
 
 var _busy: bool = false
 
 
 func _ready() -> void:
+	if not ApiClient.is_authenticated():
+		get_tree().change_scene_to_file("res://scenes/login.tscn")
+		return
+	if not GameSession.has_rider():
+		get_tree().change_scene_to_file("res://scenes/riders.tscn")
+		return
+
 	solo_button.pressed.connect(_on_solo_pressed)
 	create_button.pressed.connect(_on_create_pressed)
 	join_button.pressed.connect(_on_join_pressed)
 	my_games_button.pressed.connect(_on_my_games_pressed)
-	# Preserve rider_id across menu visits so "My Games" can find them.
-	var saved_rider_id := GameSession.rider_id
+	switch_rider_button.pressed.connect(_on_switch_rider_pressed)
+	settings_button.pressed.connect(_on_settings_pressed)
+	logout_button.pressed.connect(_on_logout_pressed)
+
+	rider_label.text = "Riding as %s" % GameSession.rider_display_name
+	# Wipe any leftover game state from a previous session, but keep the
+	# picked rider so the menu reflects it.
 	GameSession.reset()
-	GameSession.rider_id = saved_rider_id
 
 
 func _set_busy(busy: bool, message: String = "") -> void:
@@ -31,22 +41,10 @@ func _set_busy(busy: bool, message: String = "") -> void:
 	create_button.disabled = busy
 	join_button.disabled = busy
 	my_games_button.disabled = busy
+	switch_rider_button.disabled = busy
+	settings_button.disabled = busy
+	logout_button.disabled = busy
 	status_label.text = message
-
-
-func _ensure_rider() -> String:
-	if not GameSession.rider_id.is_empty():
-		return GameSession.rider_id
-	var rider: Dictionary = await ApiClient.create_rider(
-		DEFAULT_RIDER_NAME,
-		DEFAULT_RIDER_WEIGHT_KG,
-		DEFAULT_RIDER_HEIGHT_M,
-		DEFAULT_RIDER_FTP_W,
-	)
-	if rider.is_empty():
-		return ""
-	GameSession.rider_id = str(rider["id"])
-	return GameSession.rider_id
 
 
 func _on_solo_pressed() -> void:
@@ -60,11 +58,6 @@ func _on_create_pressed() -> void:
 	if _busy:
 		return
 	_set_busy(true, "Loading courses…")
-
-	var rider_id := await _ensure_rider()
-	if rider_id.is_empty():
-		_set_busy(false, "Failed to create rider")
-		return
 
 	var courses: Array = await ApiClient.list_courses()
 	if courses.is_empty():
@@ -83,7 +76,8 @@ func _on_create_pressed() -> void:
 
 	_set_busy(true, "Creating game…")
 	var game: Dictionary = await ApiClient.create_game(
-		rider_id,
+		GameSession.rider_id,
+		GameSession.rider_display_name,
 		str(chosen["id"]),
 		int(start_opt.get("countdown_duration_s", 30)),
 		int(start_opt.get("scheduled_start_in_s", -1)),
@@ -118,10 +112,25 @@ func _on_join_pressed() -> void:
 func _on_my_games_pressed() -> void:
 	if _busy:
 		return
-	_set_busy(true, "Checking rider…")
-	var rider_id := await _ensure_rider()
-	_set_busy(false, "")
-	if rider_id.is_empty():
-		status_label.text = "Could not create rider"
-		return
 	get_tree().change_scene_to_file("res://scenes/my_games.tscn")
+
+
+func _on_switch_rider_pressed() -> void:
+	if _busy:
+		return
+	get_tree().change_scene_to_file("res://scenes/riders.tscn")
+
+
+func _on_settings_pressed() -> void:
+	if _busy:
+		return
+	get_tree().change_scene_to_file("res://scenes/settings.tscn")
+
+
+func _on_logout_pressed() -> void:
+	if _busy:
+		return
+	ApiClient.logout()
+	GameSession.clear_rider()
+	GameSession.reset()
+	get_tree().change_scene_to_file("res://scenes/login.tscn")

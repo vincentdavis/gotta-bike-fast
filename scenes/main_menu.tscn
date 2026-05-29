@@ -32,6 +32,12 @@ text = "GOTTA BIKE FAST"
 theme_override_font_sizes/font_size = 48
 horizontal_alignment = 1
 
+[node name="RiderLabel" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "Riding as …"
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+
 [node name="Spacer" type="Control" parent="Center/VBox"]
 custom_minimum_size = Vector2(0, 20)
 layout_mode = 2
@@ -59,6 +65,25 @@ layout_mode = 2
 custom_minimum_size = Vector2(320, 0)
 text = "My Games"
 theme_override_font_sizes/font_size = 26
+
+[node name="SwitchRiderButton" type="Button" parent="Center/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+text = "Switch Rider"
+theme_override_font_sizes/font_size = 22
+
+[node name="SettingsButton" type="Button" parent="Center/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+text = "Settings"
+theme_override_font_sizes/font_size = 22
+
+[node name="LogoutButton" type="Button" parent="Center/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+text = "Log out"
+theme_override_font_sizes/font_size = 18
+flat = true
 
 [node name="StatusLabel" type="Label" parent="Center/VBox"]
 layout_mode = 2

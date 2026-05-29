@@ -1,0 +1,133 @@
+[gd_scene format=3 load_steps=2]
+
+[ext_resource type="Script" path="res://scripts/ui/settings.gd" id="1_set"]
+
+[node name="Settings" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_set")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.08, 0.10, 0.14, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 80
+theme_override_constants/margin_right = 80
+theme_override_constants/margin_top = 40
+theme_override_constants/margin_bottom = 40
+
+[node name="Scroll" type="ScrollContainer" parent="Margin"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="Margin/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Settings"
+theme_override_font_sizes/font_size = 36
+
+[node name="EmailLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Account: …"
+theme_override_font_sizes/font_size = 16
+
+[node name="SectionRider" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Current rider"
+theme_override_font_sizes/font_size = 22
+
+[node name="RiderSummary" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "(no rider selected)"
+theme_override_font_sizes/font_size = 18
+
+[node name="RiderHint" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Edit riders and garage in the web app."
+theme_override_font_sizes/font_size = 14
+modulate = Color(0.75, 0.75, 0.75, 1)
+
+[node name="ManageRidersButton" type="Button" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(320, 0)
+text = "Manage Riders & Garage (web)"
+theme_override_font_sizes/font_size = 18
+
+[node name="SectionDisplay" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Display"
+theme_override_font_sizes/font_size = 22
+
+[node name="UnitsLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Units"
+theme_override_font_sizes/font_size = 16
+
+[node name="UnitsOption" type="OptionButton" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 0)
+theme_override_font_sizes/font_size = 18
+
+[node name="SectionAudio" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Audio (placeholder)"
+theme_override_font_sizes/font_size = 22
+
+[node name="MusicLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Music volume"
+theme_override_font_sizes/font_size = 16
+
+[node name="MusicInput" type="HSlider" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(360, 0)
+min_value = 0.0
+max_value = 1.0
+step = 0.05
+value = 0.7
+
+[node name="SFXLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "SFX volume"
+theme_override_font_sizes/font_size = 16
+
+[node name="SFXInput" type="HSlider" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(360, 0)
+min_value = 0.0
+max_value = 1.0
+step = 0.05
+value = 0.8
+
+[node name="StatusLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = ""
+theme_override_font_sizes/font_size = 16
+
+[node name="ButtonRow" type="HBoxContainer" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="SaveButton" type="Button" parent="Margin/Scroll/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(160, 0)
+text = "Save"
+theme_override_font_sizes/font_size = 20
+
+[node name="BackButton" type="Button" parent="Margin/Scroll/VBox/ButtonRow"]
+layout_mode = 2
+text = "Back"
+theme_override_font_sizes/font_size = 20

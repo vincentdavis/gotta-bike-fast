@@ -28,7 +28,10 @@ func _on_submit() -> void:
 	if result.is_empty():
 		status_label.text = "Invalid email or password"
 		return
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	# Fresh login → clear any cached rider so the picker shows the
+	# current user's roster.
+	GameSession.clear_rider()
+	get_tree().change_scene_to_file("res://scenes/riders.tscn")
 
 
 func _on_signup_browser() -> void:

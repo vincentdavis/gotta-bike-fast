@@ -58,6 +58,7 @@ const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silen
 
 
 func _ready() -> void:
+	_apply_rider_to_kit()
 	_setup_environment()
 	_setup_ground()
 	_setup_sun()
@@ -70,6 +71,18 @@ func _ready() -> void:
 		_start_solo()
 	else:
 		_start_game()
+
+
+func _apply_rider_to_kit() -> void:
+	# Pull picked-rider stats from GameSession into the physics kit so the
+	# weight, height, and aero factor that drive the simulation match the
+	# profile the user chose. Defaults stay in PhysicsKit if no rider set.
+	# (FTP is informational on the profile today; not consumed by physics.)
+	if not GameSession.has_rider():
+		return
+	kit.rider.mass_kg = GameSession.rider_weight_kg
+	kit.rider.height_m = GameSession.rider_height_m
+	kit.rider.cda_factor = GameSession.rider_cda_factor
 
 
 # --- World construction ---
@@ -509,15 +522,10 @@ func _setup_hud() -> void:
 func _start_solo() -> void:
 	rider_id = GameSession.rider_id
 	if rider_id.is_empty():
-		hud.set_status("Creating rider…")
-		var rider: Dictionary = await ApiClient.create_rider(
-			"Anonymous", kit.rider.mass_kg, kit.rider.height_m, 200
-		)
-		if rider.is_empty():
-			hud.set_status("Failed to create rider")
-			return
-		rider_id = str(rider["id"])
-		GameSession.rider_id = rider_id
+		hud.set_status("Pick a rider first")
+		await get_tree().create_timer(1.5).timeout
+		get_tree().change_scene_to_file("res://scenes/riders.tscn")
+		return
 
 	var detail := await _resolve_course()
 	if detail.is_empty():
@@ -901,6 +909,11 @@ func _finish_ride() -> void:
 	var max_w := int(round(float(result.get("max_power_w", 0.0))))
 	hud.set_status("")
 	hud.hide_countdown()
+	# Game mode: jump to the shared race-results screen (live standings).
+	# Solo: show the inline ride-complete panel.
+	if not GameSession.is_solo:
+		get_tree().change_scene_to_file("res://scenes/results.tscn")
+		return
 	_show_summary(dist_km, time_s, avg_w, max_w)
 
 
