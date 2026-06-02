@@ -170,17 +170,80 @@ func _apply_rider_to_kit() -> void:
 func _setup_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
+
+	# Procedural sky with a defined sun + ground horizon. ProceduralSkyMaterial
+	# picks up the directional light's direction automatically through the
+	# DirectionalLight3D's sky_mode, so the sun disc tracks the sun rotation
+	# we set in _setup_sun().
 	var sky := Sky.new()
-	sky.sky_material = ProceduralSkyMaterial.new()
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.38, 0.55, 0.85)
+	sky_mat.sky_horizon_color = Color(0.78, 0.85, 0.92)
+	sky_mat.sky_curve = 0.15
+	sky_mat.ground_bottom_color = Color(0.18, 0.22, 0.26)
+	sky_mat.ground_horizon_color = Color(0.55, 0.62, 0.68)
+	sky_mat.sun_angle_max = 12.0
+	sky_mat.sun_curve = 0.10
+	sky.sky_material = sky_mat
 	env.sky = sky
+
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.6   # let shadowed faces stay legible without flattening contrast
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	# Distance fog hides the hard edge of the heightmap mesh and softens
-	# the far-distance LOD. Light blue-grey so it matches a hazy sky.
+	env.tonemap_exposure = 1.0
+
+	# SSAO — contact darkening where bike meets road, trees meet ground.
+	# Pulls the world out of "everything is floating" without a perf hit
+	# on Forward+ (default Godot 4 renderer for this project).
+	env.ssao_enabled = true
+	env.ssao_radius = 1.5
+	env.ssao_intensity = 2.5
+	env.ssao_detail = 0.5
+	env.ssao_horizon = 0.06
+	env.ssao_sharpness = 0.98
+
+	# Subtle screen-space reflections — bike chrome + wet pavement read as
+	# shiny instead of plastic-flat. Cheap because the road is matte enough
+	# that very little actually reflects.
+	env.ssr_enabled = true
+	env.ssr_max_steps = 32
+	env.ssr_depth_tolerance = 0.4
+
+	# Light bloom on the brightest highlights (sun edge, dash markings) for
+	# the "lit warmly by a real sun" look.
+	env.glow_enabled = true
+	env.glow_intensity = 0.6
+	env.glow_strength = 1.0
+	env.glow_bloom = 0.1
+
+	# Volumetric fog instead of the older constant-density distance fog.
+	# Receives sun lighting so backlit fog brightens and frontlit fog cools
+	# — gives the world an atmospheric depth cue the linear fog lacked.
+	env.volumetric_fog_enabled = true
+	env.volumetric_fog_density = 0.003
+	env.volumetric_fog_albedo = Color(0.92, 0.94, 0.98)
+	env.volumetric_fog_emission = Color(0.0, 0.0, 0.0)
+	env.volumetric_fog_emission_energy = 0.0
+	env.volumetric_fog_length = 250.0  # in metres along the camera frustum
+	env.volumetric_fog_anisotropy = 0.2
+	env.volumetric_fog_ambient_inject = 0.4
+	env.volumetric_fog_sky_affect = 1.0
+	# Keep a thin layer of cheap distance fog as a safety net beyond the
+	# volumetric fog's range — heightmap mesh edge would otherwise pop.
 	env.fog_enabled = true
-	env.fog_density = 0.0015
-	env.fog_light_color = Color(0.65, 0.72, 0.80)
-	env.fog_aerial_perspective = 0.4
+	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	env.fog_density = 0.0006
+	env.fog_light_color = Color(0.78, 0.85, 0.92)
+	env.fog_aerial_perspective = 0.5
+	env.fog_sky_affect = 0.6
+
+	# Slight saturation + contrast bump for the "stylized hyperreal" look
+	# Zwift / Forza go for. Cheap, dramatic, easy to dial back.
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.15
+	env.adjustment_contrast = 1.05
+	env.adjustment_brightness = 1.0
+
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -642,13 +705,18 @@ func _setup_road() -> void:
 	const LINE_WIDTH := 0.15
 	const DASH_LENGTH := 3.0
 	const DASH_PERIOD := 8.0
+	# UV repeat scale — every TEX_TILE_M metres of road length re-tiles the
+	# asphalt texture once. ~4 m matches the road's own width so the grain
+	# is consistent across both axes regardless of how the camera frames it.
+	const TEX_TILE_M := 4.0
 	if _course_path.size() < 2:
 		return
 
 	# Asphalt: one ArrayMesh assembled from quads whose corners use the
 	# pre-computed waypoint right vectors. Sharing corners between adjacent
 	# segments (miter join) keeps the surface continuous through turns
-	# with no visible seams.
+	# with no visible seams. UVs are set per-vertex so the procedural
+	# asphalt texture tiles down the road's length without stretching.
 	var asphalt := SurfaceTool.new()
 	asphalt.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var half_w := ROAD_WIDTH * 0.5
@@ -664,31 +732,29 @@ func _setup_road() -> void:
 		var right0 := pos0 + r0 * half_w
 		var left1 := pos1 - r1 * half_w
 		var right1 := pos1 + r1 * half_w
+		# v cycles every TEX_TILE_M of distance-along-path; u maps the road
+		# width to [0, 1]. A small lateral repeat (uv1_scale on the material)
+		# packs more grain per metre once both maps are in place.
+		var v0: float = float(p0["distance_m"]) / TEX_TILE_M
+		var v1: float = float(p1["distance_m"]) / TEX_TILE_M
 		# Two triangles forming the quad. CCW from above so the surface
 		# normal points +Y (up) — visible to a camera looking down at it.
-		asphalt.add_vertex(left0)
-		asphalt.add_vertex(right0)
-		asphalt.add_vertex(left1)
-		asphalt.add_vertex(right0)
-		asphalt.add_vertex(right1)
-		asphalt.add_vertex(left1)
+		asphalt.set_uv(Vector2(0.0, v0)); asphalt.add_vertex(left0)
+		asphalt.set_uv(Vector2(1.0, v0)); asphalt.add_vertex(right0)
+		asphalt.set_uv(Vector2(0.0, v1)); asphalt.add_vertex(left1)
+		asphalt.set_uv(Vector2(1.0, v0)); asphalt.add_vertex(right0)
+		asphalt.set_uv(Vector2(1.0, v1)); asphalt.add_vertex(right1)
+		asphalt.set_uv(Vector2(0.0, v1)); asphalt.add_vertex(left1)
 	asphalt.generate_normals()
+	asphalt.generate_tangents()  # needed for the asphalt normal map to light correctly
 	var asphalt_inst := MeshInstance3D.new()
 	asphalt_inst.mesh = asphalt.commit()
-	var asphalt_mat := StandardMaterial3D.new()
-	asphalt_mat.albedo_color = Color(0.18, 0.18, 0.20)
-	asphalt_mat.roughness = 0.85
-	# Render both sides so the road is visible whether the camera is above
-	# (normal day looking down a flat road) or below (looking up at a
-	# climbing road ahead). A real road only has one side, but here we
-	# don't have terrain underneath, so the underside being visible costs
-	# nothing visually.
-	asphalt_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	asphalt_inst.material_override = asphalt_mat
+	asphalt_inst.material_override = _build_asphalt_material()
 	add_child(asphalt_inst)
 
 	# Dashed centre line — short rectangles laid along the path tangent
-	# at regular distance intervals.
+	# at regular distance intervals. Bright bone-white now and slightly
+	# elevated so SSAO doesn't darken the leading edge.
 	var dashes := SurfaceTool.new()
 	dashes.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dash_half_w := LINE_WIDTH * 0.5
@@ -719,10 +785,76 @@ func _setup_road() -> void:
 	var dash_inst := MeshInstance3D.new()
 	dash_inst.mesh = dashes.commit()
 	var dash_mat := StandardMaterial3D.new()
-	dash_mat.albedo_color = Color(0.92, 0.92, 0.78)
+	dash_mat.albedo_color = Color(0.98, 0.97, 0.92)  # crisp warm white
+	dash_mat.roughness = 0.55
+	dash_mat.emission_enabled = true
+	dash_mat.emission = Color(0.20, 0.20, 0.18)  # tiny self-emit so dashes punch through fog
+	dash_mat.emission_energy_multiplier = 0.4
 	dash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	dash_inst.material_override = dash_mat
 	add_child(dash_inst)
+
+
+# --- Road materials (procedural, generated once per ride) ---
+
+func _build_asphalt_material() -> StandardMaterial3D:
+	# Two coupled textures generated from FastNoiseLite:
+	#   1. albedo — high-frequency grayscale grain ramped through a narrow
+	#      dark band (asphalt is almost-but-not-quite black, gets darker
+	#      after the rain reading on day-1 cyclist photos).
+	#   2. normal — same noise re-derived through NoiseTexture2D's
+	#      as_normal_map for surface micro-bumps. Lit dynamically by the
+	#      sun so the road gets specular highlights as the camera pans.
+	#
+	# Both tile seamlessly so the per-vertex UVs in _setup_road wrap
+	# without visible joints.
+
+	var albedo_noise := FastNoiseLite.new()
+	albedo_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	albedo_noise.frequency = 0.85
+	albedo_noise.fractal_octaves = 4
+	albedo_noise.fractal_lacunarity = 2.2
+	albedo_noise.fractal_gain = 0.55
+
+	var albedo_tex := NoiseTexture2D.new()
+	albedo_tex.noise = albedo_noise
+	albedo_tex.width = 512
+	albedo_tex.height = 512
+	albedo_tex.seamless = true
+	albedo_tex.seamless_blend_skirt = 0.10
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(0.08, 0.08, 0.09))
+	ramp.set_color(1, Color(0.26, 0.26, 0.27))
+	albedo_tex.color_ramp = ramp
+
+	# Normal map from a sibling noise — slightly higher frequency to read
+	# as the asphalt aggregate (small stones) rather than coarse rolls.
+	var normal_noise := FastNoiseLite.new()
+	normal_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	normal_noise.frequency = 1.6
+	normal_noise.fractal_octaves = 3
+	var normal_tex := NoiseTexture2D.new()
+	normal_tex.noise = normal_noise
+	normal_tex.width = 512
+	normal_tex.height = 512
+	normal_tex.seamless = true
+	normal_tex.seamless_blend_skirt = 0.10
+	normal_tex.as_normal_map = true
+	normal_tex.bump_strength = 4.0
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = albedo_tex
+	mat.normal_enabled = true
+	mat.normal_texture = normal_tex
+	mat.normal_scale = 0.55
+	mat.roughness = 0.78
+	mat.metallic = 0.0
+	# Sub-metre lateral repeat × longer along-road tile — asphalt grain is
+	# small and isotropic, so we want a lot of repetitions per visible
+	# metre, not stretched ribbons down the centerline.
+	mat.uv1_scale = Vector3(2.0, 1.0, 1.0)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
 
 
 func _setup_markers() -> void:
@@ -861,10 +993,38 @@ func _setup_scenery() -> void:
 
 
 func _setup_sun() -> void:
+	# Mid-morning sun: high enough to throw long-but-not-flat shadows along
+	# the road, off-axis enough that climbing turns face into and away from
+	# light so the heightmap mesh reads as three-dimensional.
 	var sun := DirectionalLight3D.new()
-	sun.shadow_enabled = true
 	sun.rotation_degrees = Vector3(-55, -35, 0)
-	sun.light_energy = 1.2
+	sun.light_energy = 1.4
+	sun.light_color = Color(1.0, 0.97, 0.92)  # warm sunlight, faint amber cast
+
+	# Parallel split shadow maps — four cascades give crisp shadows under
+	# the rider while still covering scenery out to ~200 m without the
+	# perspective-aliasing "blocky shadow" look one big map produces.
+	sun.shadow_enabled = true
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 200.0
+	sun.directional_shadow_split_1 = 0.06   # tight near cascade for the bike/rider
+	sun.directional_shadow_split_2 = 0.18
+	sun.directional_shadow_split_3 = 0.45
+	sun.directional_shadow_fade_start = 0.85
+	sun.directional_shadow_blend_splits = true
+	# Bias settings that work for our scene scale (1 unit = 1 m, mostly
+	# flat-ish terrain). Lower-than-default normal bias prevents the
+	# rider's shadow from detaching from his wheels on the road.
+	sun.shadow_bias = 0.05
+	sun.shadow_normal_bias = 1.5
+	sun.shadow_blur = 1.2
+
+	# Let the sun light the sky shader directly so the procedural sun disc
+	# matches our directional light direction, and skybox lighting shows up
+	# in ambient. Without this the sky disc would be static and ambient
+	# wouldn't pick up the warm cast.
+	sun.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_AND_SKY
+
 	add_child(sun)
 
 
