@@ -11,19 +11,144 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_main")
 
-[node name="StatusLabel" type="Label" parent="."]
+[node name="Background" type="ColorRect" parent="."]
 layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -240.0
-offset_top = -40.0
-offset_right = 240.0
-offset_bottom = 40.0
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-text = "Backend: connecting…"
+color = Color(0.07, 0.09, 0.13, 1)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="Title" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "GOTTA BIKE FAST"
 horizontal_alignment = 1
-vertical_alignment = 1
+theme_override_font_sizes/font_size = 36
+theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
+
+[node name="Subtitle" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "Connection status"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 14
+theme_override_colors/font_color = Color(0.65, 0.7, 0.8, 1)
+
+[node name="StatusPanel" type="PanelContainer" parent="Center/VBox"]
+custom_minimum_size = Vector2(440, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="Center/VBox/StatusPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_bottom = 14
+
+[node name="VBox" type="VBoxContainer" parent="Center/VBox/StatusPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="FastAPIRow" type="HBoxContainer" parent="Center/VBox/StatusPanel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="FastAPIDot" type="ColorRect" parent="Center/VBox/StatusPanel/Margin/VBox/FastAPIRow"]
+custom_minimum_size = Vector2(14, 14)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.95, 0.75, 0.25, 1)
+
+[node name="FastAPIText" type="VBoxContainer" parent="Center/VBox/StatusPanel/Margin/VBox/FastAPIRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="FastAPILabel" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/FastAPIRow/FastAPIText"]
+layout_mode = 2
+text = "FastAPI (game server)"
+theme_override_font_sizes/font_size = 16
+
+[node name="FastAPIURL" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/FastAPIRow/FastAPIText"]
+layout_mode = 2
+text = "http://127.0.0.1:8001"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.6, 0.65, 0.75, 1)
+
+[node name="FastAPIStatus" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/FastAPIRow"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "Connecting…"
+theme_override_font_sizes/font_size = 14
+
+[node name="WebRow" type="HBoxContainer" parent="Center/VBox/StatusPanel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="WebDot" type="ColorRect" parent="Center/VBox/StatusPanel/Margin/VBox/WebRow"]
+custom_minimum_size = Vector2(14, 14)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.95, 0.75, 0.25, 1)
+
+[node name="WebText" type="VBoxContainer" parent="Center/VBox/StatusPanel/Margin/VBox/WebRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="WebLabel" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/WebRow/WebText"]
+layout_mode = 2
+text = "Django (accounts, riders, routes)"
+theme_override_font_sizes/font_size = 16
+
+[node name="WebURL" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/WebRow/WebText"]
+layout_mode = 2
+text = "http://127.0.0.1:8000"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.6, 0.65, 0.75, 1)
+
+[node name="WebStatus" type="Label" parent="Center/VBox/StatusPanel/Margin/VBox/WebRow"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "Connecting…"
+theme_override_font_sizes/font_size = 14
+
+[node name="Hint" type="Label" parent="Center/VBox"]
+layout_mode = 2
+text = "Rechecks every 3 seconds."
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.5, 0.55, 0.65, 1)
+
+[node name="ButtonRow" type="HBoxContainer" parent="Center/VBox"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 12
+
+[node name="RetryButton" type="Button" parent="Center/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 36)
+text = "Retry now"
+
+[node name="DevButton" type="Button" parent="Center/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(140, 36)
+text = "Open Dev Menu"
+
+[node name="ContinueButton" type="Button" parent="Center/VBox/ButtonRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(140, 36)
+disabled = true
+text = "Continue"

@@ -1,6 +1,16 @@
 extends Node
 
+# Legacy single-shot signal — kept for callers (e.g. main.gd before the
+# landing-page refactor) that listen for the first response and route.
+# Prefer connection_status_changed for new code.
 signal healthz_received(ok: bool, body: String)
+
+# Modern persistent connection-status signal. Fires every time the
+# status for either service changes. service is "fastapi" or "web";
+# status is one of the Status enum values below.
+signal connection_status_changed(service: String, status: int)
+
+enum Status { CONNECTING, OK, OFFLINE }
 
 const AUTH_FILE := "user://auth.cfg"
 
@@ -8,6 +18,11 @@ const AUTH_FILE := "user://auth.cfg"
 # menu can override them without touching code.
 var base_url: String = ""  # FastAPI — live game state
 var web_url: String = ""   # Django — accounts + riders + profile
+
+# Last-seen reachability of each backend. Read these directly for one-shot
+# checks; subscribe to connection_status_changed for live updates.
+var fastapi_status: int = Status.CONNECTING
+var web_status: int = Status.CONNECTING
 
 var _access_token: String = ""
 var _refresh_token: String = ""
@@ -155,11 +170,45 @@ func _load_auth() -> void:
 # --- Public API ---
 
 func ping() -> void:
+	# FastAPI healthz probe. Marks fastapi_status as CONNECTING for the
+	# duration of the request so any UI listening sees an immediate "in
+	# flight" amber state, then flips to OK / OFFLINE based on the result.
+	_set_status("fastapi", Status.CONNECTING)
 	var result: Dictionary = await _do_request("GET", "/healthz", null)
 	if result["ok"]:
+		_set_status("fastapi", Status.OK)
 		healthz_received.emit(true, result["body_text"])
 	else:
+		_set_status("fastapi", Status.OFFLINE)
 		healthz_received.emit(false, "code=%s" % result["response_code"])
+
+
+func ping_web() -> void:
+	# Django reachability probe. There's no dedicated healthz on the
+	# Django side, so we hit the auto-generated /api/docs (django-ninja
+	# always exposes it) and treat any 2xx/3xx as alive.
+	_set_status("web", Status.CONNECTING)
+	var result: Dictionary = await _do_request("GET", "/api/docs", null, web_url)
+	_set_status("web", Status.OK if result["ok"] else Status.OFFLINE)
+
+
+func ping_all() -> void:
+	# Convenience for landing-page / status-pill use: kick both probes
+	# off concurrently. Each will update its own status independently.
+	ping()
+	ping_web()
+
+
+func _set_status(service: String, status: int) -> void:
+	var changed := false
+	if service == "fastapi" and fastapi_status != status:
+		fastapi_status = status
+		changed = true
+	elif service == "web" and web_status != status:
+		web_status = status
+		changed = true
+	if changed:
+		connection_status_changed.emit(service, status)
 
 
 func list_courses() -> Array:

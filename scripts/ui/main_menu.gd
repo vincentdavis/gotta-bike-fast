@@ -148,6 +148,9 @@ func _on_settings_pressed() -> void:
 func _on_dev_pressed() -> void:
 	if _busy:
 		return
+	# Hand the dev menu a breadcrumb so its Back button returns here
+	# instead of falling through to the landing page.
+	GameSession.dev_menu_return_scene = "res://scenes/main_menu.tscn"
 	get_tree().change_scene_to_file("res://scenes/dev_menu.tscn")
 
 

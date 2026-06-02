@@ -33,6 +33,12 @@ var race_starts_at_unix_s: float = 0.0  # Unix epoch seconds (server clock)
 var scheduled_start_at_unix_s: float = 0.0  # 0 = no schedule (manual start)
 var is_solo: bool = false
 
+# Dev-menu return target. Set by whatever screen opens the dev menu so
+# the menu's Back button can return there. The dev menu clears this on
+# exit so a stale value doesn't redirect later navigation.
+# Defaults to the landing page — safest fallback if nothing set it.
+var dev_menu_return_scene: String = "res://scenes/main.tscn"
+
 
 static func parse_iso_to_unix(iso: String) -> float:
 	if iso.is_empty():
