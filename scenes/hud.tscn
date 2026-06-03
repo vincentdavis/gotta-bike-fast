@@ -1,6 +1,7 @@
-[gd_scene format=3 load_steps=2]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/hud.gd" id="1_hud"]
+[ext_resource type="Script" path="res://scripts/ui/draggable_panel.gd" id="2_drag"]
 
 [node name="HUD" type="CanvasLayer"]
 script = ExtResource("1_hud")
@@ -13,6 +14,10 @@ offset_top = 20.0
 offset_right = -20.0
 offset_bottom = 420.0
 grow_horizontal = 0
+mouse_default_cursor_shape = 13
+script = ExtResource("2_drag")
+panel_id = "leaderboard"
+default_size = Vector2(320, 400)
 
 [node name="Margin" type="MarginContainer" parent="LeaderboardPanel"]
 theme_override_constants/margin_left = 14
@@ -21,13 +26,19 @@ theme_override_constants/margin_top = 10
 theme_override_constants/margin_bottom = 10
 
 [node name="VBox" type="VBoxContainer" parent="LeaderboardPanel/Margin"]
+size_flags_vertical = 3
 theme_override_constants/separation = 6
 
 [node name="Title" type="Label" parent="LeaderboardPanel/Margin/VBox"]
 text = "Leaderboard"
 theme_override_font_sizes/font_size = 22
 
-[node name="List" type="VBoxContainer" parent="LeaderboardPanel/Margin/VBox"]
+[node name="Scroll" type="ScrollContainer" parent="LeaderboardPanel/Margin/VBox"]
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="List" type="VBoxContainer" parent="LeaderboardPanel/Margin/VBox/Scroll"]
+size_flags_horizontal = 3
 theme_override_constants/separation = 2
 
 [node name="CountdownLabel" type="Label" parent="."]
@@ -106,6 +117,10 @@ offset_right = -20.0
 offset_bottom = -20.0
 grow_horizontal = 0
 grow_vertical = 0
+mouse_default_cursor_shape = 13
+script = ExtResource("2_drag")
+panel_id = "minimap"
+default_size = Vector2(240, 240)
 
 [node name="Margin" type="MarginContainer" parent="MinimapPanel"]
 theme_override_constants/margin_left = 8
@@ -114,6 +129,7 @@ theme_override_constants/margin_top = 6
 theme_override_constants/margin_bottom = 8
 
 [node name="VBox" type="VBoxContainer" parent="MinimapPanel/Margin"]
+size_flags_vertical = 3
 theme_override_constants/separation = 4
 
 [node name="Title" type="Label" parent="MinimapPanel/Margin/VBox"]
@@ -122,7 +138,9 @@ theme_override_font_sizes/font_size = 14
 horizontal_alignment = 1
 
 [node name="MapBox" type="Control" parent="MinimapPanel/Margin/VBox"]
-custom_minimum_size = Vector2(220, 200)
+custom_minimum_size = Vector2(80, 80)
+size_flags_horizontal = 3
+size_flags_vertical = 3
 clip_contents = true
 
 [node name="MinimapRect" type="TextureRect" parent="MinimapPanel/Margin/VBox/MapBox"]

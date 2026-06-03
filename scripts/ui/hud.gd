@@ -10,7 +10,8 @@ extends CanvasLayer
 @onready var course_label: Label = $VBox/CourseLabel
 @onready var status_label: Label = $VBox/StatusLabel
 @onready var countdown_label: Label = $CountdownLabel
-@onready var leaderboard_list: VBoxContainer = $LeaderboardPanel/Margin/VBox/List
+@onready var leaderboard_panel: PanelContainer = $LeaderboardPanel
+@onready var leaderboard_list: VBoxContainer = $LeaderboardPanel/Margin/VBox/Scroll/List
 @onready var minimap_panel: PanelContainer = $MinimapPanel
 @onready var minimap_box: Control = $MinimapPanel/Margin/VBox/MapBox
 @onready var minimap_rect: TextureRect = $MinimapPanel/Margin/VBox/MapBox/MinimapRect
@@ -135,3 +136,8 @@ func set_leaderboard(entries: Array) -> void:
 		if is_me:
 			row.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 		leaderboard_list.add_child(row)
+	# Newly-created rows default to capturing the mouse, which would
+	# block a drag started over them — let them pass through so the
+	# whole panel stays grabbable.
+	if leaderboard_panel.has_method("make_content_passthrough"):
+		leaderboard_panel.make_content_passthrough()
