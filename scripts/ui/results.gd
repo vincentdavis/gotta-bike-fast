@@ -110,4 +110,4 @@ func _label(text: String, min_width: int, color: Color) -> Label:
 func _on_back() -> void:
 	_polling = false
 	GameSession.reset()
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	get_tree().change_scene_to_file("res://scenes/main.tscn")

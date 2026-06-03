@@ -106,7 +106,7 @@ func _on_race_ended(reason: String) -> void:
 	if is_inside_tree():
 		WorldClient.disconnect_now()
 		GameSession.reset()
-		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+		get_tree().change_scene_to_file("res://scenes/main.tscn")
 
 
 func _on_copy_pressed() -> void:
@@ -132,7 +132,7 @@ func _on_leave_pressed() -> void:
 	await ApiClient.leave_game(GameSession.code, GameSession.rider_id)
 	WorldClient.disconnect_now()
 	GameSession.reset()
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
 
 
 func _parse_iso_to_unix(iso_str: String) -> float:

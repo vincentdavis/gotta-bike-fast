@@ -146,4 +146,4 @@ func _normalize_code(raw: String) -> String:
 
 func _on_back_pressed() -> void:
 	_polling = false
-	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+	get_tree().change_scene_to_file("res://scenes/main.tscn")

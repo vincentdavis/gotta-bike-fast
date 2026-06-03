@@ -74,13 +74,12 @@ func _probe(url: String) -> bool:
 
 
 func _on_back() -> void:
-	# Return to whoever opened the menu. main_menu (authed user, normal
-	# flow) and the landing page (boot, possibly offline) both set this
-	# before navigating in. Falls back to main_menu so older entry
+	# Return to whoever opened the menu (the System tab sets this before
+	# navigating in). Falls back to the unified home page so older entry
 	# points don't end up at a blank scene if they forgot to set it.
 	var ret := GameSession.dev_menu_return_scene
 	if ret.is_empty():
-		ret = "res://scenes/main_menu.tscn"
+		ret = "res://scenes/main.tscn"
 	# Clear the hint so it doesn't bleed into a later, unrelated navigation.
 	GameSession.dev_menu_return_scene = ""
 	get_tree().change_scene_to_file(ret)

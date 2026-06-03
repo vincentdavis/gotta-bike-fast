@@ -1184,14 +1184,14 @@ func _start_solo() -> void:
 	if rider_id.is_empty():
 		hud.set_status("Pick a rider first")
 		await get_tree().create_timer(1.5).timeout
-		get_tree().change_scene_to_file("res://scenes/riders.tscn")
+		get_tree().change_scene_to_file("res://scenes/main.tscn")
 		return
 
 	var detail := await _resolve_course()
 	if detail.is_empty():
-		# Picker cancelled or load failed — back to menu.
+		# Picker cancelled or load failed — back to home.
 		await get_tree().create_timer(0.4).timeout
-		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+		get_tree().change_scene_to_file("res://scenes/main.tscn")
 		return
 
 	current_course = detail
@@ -1752,7 +1752,7 @@ func _show_summary(dist_km: float, time_s: float, avg_w: int, max_w: int) -> voi
 	btn.pressed.connect(
 		func() -> void:
 			GameSession.reset()
-			get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+			get_tree().change_scene_to_file("res://scenes/main.tscn")
 	)
 	vbox.add_child(btn)
 
