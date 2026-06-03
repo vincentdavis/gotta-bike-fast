@@ -11,6 +11,15 @@ extends Control
 @onready var status_label: Label = $Center/VBox/StatusLabel
 @onready var rider_label: Label = $Center/VBox/RiderLabel
 @onready var signed_in_label: Label = $Center/VBox/SignedInLabel
+@onready var status_button: Button = $StatusButton
+@onready var fastapi_dot: ColorRect = $StatusButton/StatusHBox/FastAPIDot
+@onready var web_dot: ColorRect = $StatusButton/StatusHBox/WebDot
+
+# Same palette as the landing page so the indicator reads consistently
+# across the two surfaces.
+const DOT_OK := Color(0.30, 0.78, 0.40, 1.0)
+const DOT_OFFLINE := Color(0.85, 0.28, 0.28, 1.0)
+const DOT_CONNECTING := Color(0.95, 0.75, 0.25, 1.0)
 
 var _busy: bool = false
 
@@ -31,6 +40,13 @@ func _ready() -> void:
 	settings_button.pressed.connect(_on_settings_pressed)
 	dev_button.pressed.connect(_on_dev_pressed)
 	logout_button.pressed.connect(_on_logout_pressed)
+	status_button.pressed.connect(_on_status_button_pressed)
+
+	# Live server-status indicator pinned to the top-right. ApiClient
+	# polls in the background; we just paint the two dots from the
+	# current status and update on every state flip.
+	ApiClient.connection_status_changed.connect(_on_connection_status_changed)
+	_refresh_status_dots()
 
 	rider_label.text = "Riding as %s" % GameSession.rider_display_name
 	signed_in_label.text = "Signed in as %s" % ApiClient.user_label()
@@ -152,6 +168,31 @@ func _on_dev_pressed() -> void:
 	# instead of falling through to the landing page.
 	GameSession.dev_menu_return_scene = "res://scenes/main_menu.tscn"
 	get_tree().change_scene_to_file("res://scenes/dev_menu.tscn")
+
+
+func _on_status_button_pressed() -> void:
+	# Open the landing page (full pills + retry + dev menu entry). It
+	# can route back here via Continue when both services are OK.
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+
+func _on_connection_status_changed(_service: String, _status: int) -> void:
+	_refresh_status_dots()
+
+
+func _refresh_status_dots() -> void:
+	fastapi_dot.color = _color_for(ApiClient.fastapi_status)
+	web_dot.color = _color_for(ApiClient.web_status)
+
+
+func _color_for(status: int) -> Color:
+	match status:
+		ApiClient.Status.OK:
+			return DOT_OK
+		ApiClient.Status.OFFLINE:
+			return DOT_OFFLINE
+		_:
+			return DOT_CONNECTING
 
 
 func _on_logout_pressed() -> void:

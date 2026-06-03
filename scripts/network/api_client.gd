@@ -31,11 +31,33 @@ var user_email: String = ""
 var user_display_name: String = ""
 
 
+const RECHECK_INTERVAL_S := 3.0
+
+
 func _ready() -> void:
 	base_url = DevSettings.base_url
 	web_url = DevSettings.web_url
 	_load_auth()
-	ping()
+	# First probe of each backend, then a recurring re-poll so any scene
+	# listening to connection_status_changed gets live updates without
+	# wiring its own timer. Cheap (one /healthz + one /api/docs every
+	# few seconds) and keeps the menu / lobby pills accurate even when
+	# nothing else triggers a request.
+	ping_all()
+	var t := Timer.new()
+	t.wait_time = RECHECK_INTERVAL_S
+	t.autostart = true
+	t.timeout.connect(_on_recheck_tick)
+	add_child(t)
+
+
+func _on_recheck_tick() -> void:
+	# Skip whichever service is mid-flight so we don't stack concurrent
+	# /healthz requests when a backend is being slow.
+	if fastapi_status != Status.CONNECTING:
+		ping()
+	if web_status != Status.CONNECTING:
+		ping_web()
 
 
 # --- Auth ---

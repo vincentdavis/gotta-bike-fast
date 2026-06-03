@@ -22,6 +22,54 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 
+[node name="StatusButton" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -180.0
+offset_top = 12.0
+offset_right = -12.0
+offset_bottom = 44.0
+grow_horizontal = 0
+tooltip_text = "Live server status — click to open landing page"
+flat = true
+
+[node name="StatusHBox" type="HBoxContainer" parent="StatusButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 4.0
+offset_right = -8.0
+offset_bottom = -4.0
+alignment = 2
+theme_override_constants/separation = 6
+mouse_filter = 2
+
+[node name="StatusText" type="Label" parent="StatusButton/StatusHBox"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "Servers"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.7, 0.75, 0.85, 1)
+mouse_filter = 2
+
+[node name="FastAPIDot" type="ColorRect" parent="StatusButton/StatusHBox"]
+custom_minimum_size = Vector2(12, 12)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.95, 0.75, 0.25, 1)
+mouse_filter = 2
+
+[node name="WebDot" type="ColorRect" parent="StatusButton/StatusHBox"]
+custom_minimum_size = Vector2(12, 12)
+layout_mode = 2
+size_flags_vertical = 4
+color = Color(0.95, 0.75, 0.25, 1)
+mouse_filter = 2
+
 [node name="VBox" type="VBoxContainer" parent="Center"]
 layout_mode = 2
 theme_override_constants/separation = 18

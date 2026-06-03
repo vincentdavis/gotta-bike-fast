@@ -2,13 +2,15 @@ extends Control
 
 # Landing page — the always-loadable home you can reach even when both
 # backends are down. Shows live connection status for FastAPI + Django,
-# re-polls every 3 seconds, exposes a Retry button + a Dev Menu door
-# (where URLs can be edited) + a Continue button that's only enabled
-# once both services are reachable. Continue routes to the same target
-# the original boot script chose (login → riders → main menu) based on
-# auth + rider-pick state.
-
-const RECHECK_INTERVAL_S := 3.0
+# exposes a Retry button + a Dev Menu door (where URLs can be edited) +
+# a Continue button that's only enabled once both services are
+# reachable. Continue routes to the same target the original boot
+# script chose (login → riders → main menu) based on auth + rider-pick
+# state.
+#
+# The background re-poll lives in ApiClient now (RECHECK_INTERVAL_S
+# there) so other scenes can subscribe to the same status without
+# duplicating the timer.
 
 const DOT_OK := Color(0.30, 0.78, 0.40, 1.0)
 const DOT_OFFLINE := Color(0.85, 0.28, 0.28, 1.0)
@@ -24,8 +26,6 @@ const DOT_CONNECTING := Color(0.95, 0.75, 0.25, 1.0)
 @onready var dev_button: Button = $Center/VBox/ButtonRow/DevButton
 @onready var continue_button: Button = $Center/VBox/ButtonRow/ContinueButton
 
-var _recheck_timer: Timer
-
 
 func _ready() -> void:
 	# Reflect whatever URLs are actually in use right now (which may have
@@ -38,32 +38,12 @@ func _ready() -> void:
 	dev_button.pressed.connect(_on_dev_pressed)
 	continue_button.pressed.connect(_on_continue_pressed)
 
-	# Kick off the first check immediately. ApiClient already ran ping()
-	# on its own _ready() so fastapi_status may already be OK by now —
-	# this also lights up the Django pill, which ApiClient doesn't probe
-	# automatically.
-	ApiClient.ping_all()
-
-	# Recurring re-poll so the page self-heals when a backend comes
-	# back online without the user clicking anything.
-	_recheck_timer = Timer.new()
-	_recheck_timer.wait_time = RECHECK_INTERVAL_S
-	_recheck_timer.autostart = true
-	_recheck_timer.timeout.connect(_on_recheck_tick)
-	add_child(_recheck_timer)
+	# ApiClient already does the periodic re-poll on its own timer (see
+	# _on_recheck_tick there). No timer needed in this scene.
 
 
 func _on_connection_status_changed(_service: String, _status: int) -> void:
 	_refresh_pills()
-
-
-func _on_recheck_tick() -> void:
-	# Only re-poll services that aren't currently mid-flight. Avoids
-	# stacking concurrent /healthz requests if a backend is slow.
-	if ApiClient.fastapi_status != ApiClient.Status.CONNECTING:
-		ApiClient.ping()
-	if ApiClient.web_status != ApiClient.Status.CONNECTING:
-		ApiClient.ping_web()
 
 
 func _on_retry_pressed() -> void:
