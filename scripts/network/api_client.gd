@@ -10,6 +10,11 @@ signal healthz_received(ok: bool, body: String)
 # status is one of the Status enum values below.
 signal connection_status_changed(service: String, status: int)
 
+# Fired when an authenticated request gets a 401 AND the refresh token
+# is also dead, so the session is genuinely over. Listeners (the home
+# page) should drop to a logged-out state and show the login form.
+signal auth_expired
+
 enum Status { CONNECTING, OK, OFFLINE }
 
 const AUTH_FILE := "user://auth.cfg"
@@ -217,6 +222,32 @@ func _set_tokens_from_response(data: Dictionary) -> void:
 	_refresh_token = str(tokens.get("refresh_token", ""))
 	_set_user_from_dict(data.get("user", {}))
 	_save_auth()
+
+
+func _try_refresh() -> bool:
+	# Exchange the refresh token for a fresh access token. Called from
+	# _do_request when an authed call 401s. Returns true if we got a new
+	# access token. The /api/auth/refresh response is a bare TokenPair
+	# ({access_token, refresh_token}), not wrapped in "tokens", so we
+	# can't reuse _set_tokens_from_response here.
+	if _refresh_token.is_empty():
+		return false
+	var result: Dictionary = await _do_request(
+		"POST", "/api/auth/refresh",
+		{"refresh_token": _refresh_token}, web_url, false
+	)
+	if not (result["ok"] and result["json"] is Dictionary):
+		return false
+	var data: Dictionary = result["json"]
+	var new_access := str(data.get("access_token", ""))
+	if new_access.is_empty():
+		return false
+	_access_token = new_access
+	var new_refresh := str(data.get("refresh_token", ""))
+	if not new_refresh.is_empty():
+		_refresh_token = new_refresh
+	_save_auth()
+	return true
 
 
 func _save_auth() -> void:
@@ -454,7 +485,9 @@ func start_game(code: String, rider_id: String) -> Dictionary:
 
 # --- Internal ---
 
-func _do_request(method: String, path: String, body, base: String = "") -> Dictionary:
+func _do_request(
+	method: String, path: String, body, base: String = "", allow_refresh: bool = true
+) -> Dictionary:
 	var origin: String = base if not base.is_empty() else base_url
 	var http := HTTPRequest.new()
 	add_child(http)
@@ -497,6 +530,28 @@ func _do_request(method: String, path: String, body, base: String = "") -> Dicti
 		and response_code >= 200
 		and response_code < 300
 	)
+
+	# Auto-recover from an expired access token: if an authed call 401s
+	# and we have a refresh token, swap it for a fresh access token and
+	# retry the original request once. If refresh also fails the session
+	# is genuinely over — clear tokens and let listeners show the login
+	# form. Skipped for the refresh/login endpoints themselves and when
+	# the caller opted out (allow_refresh=false, e.g. the retry itself).
+	if (
+		response_code == 401
+		and allow_refresh
+		and not _access_token.is_empty()
+		and not _refresh_token.is_empty()
+		and path != "/api/auth/refresh"
+		and path != "/api/auth/login"
+	):
+		var refreshed: bool = await _try_refresh()
+		if refreshed:
+			return await _do_request(method, path, body, base, false)
+		# Refresh token dead too — surface a clean logged-out state.
+		logout()
+		auth_expired.emit()
+
 	if not ok:
 		push_warning(
 			"ApiClient: %s %s failed result=%s code=%s body=%s"

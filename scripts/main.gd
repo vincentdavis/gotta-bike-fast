@@ -70,6 +70,7 @@ func _ready() -> void:
 	# Wipe stale game state from a prior session, keep the picked rider.
 	GameSession.reset()
 	ApiClient.connection_status_changed.connect(_on_connection_status_changed)
+	ApiClient.auth_expired.connect(_on_auth_expired)
 	_refresh_status()
 	_apply_auth_state()
 	if ApiClient.is_authenticated():
@@ -498,6 +499,19 @@ func _on_logout_pressed() -> void:
 	GameSession.reset()
 	_render_riders([])
 	_apply_auth_state()
+
+
+func _on_auth_expired() -> void:
+	# The cached session is fully expired (access + refresh both dead).
+	# ApiClient has already cleared its tokens; mirror that here so the
+	# page drops cleanly to the login form instead of showing "signed
+	# in" with an empty rider list.
+	GameSession.clear_rider()
+	GameSession.reset()
+	_render_riders([])
+	_apply_auth_state()
+	if _account_status != null and is_instance_valid(_account_status):
+		_account_status.text = "Your session expired — please sign in again."
 
 
 # --- Rider tab ---
