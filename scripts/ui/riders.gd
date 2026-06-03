@@ -182,7 +182,8 @@ func _auto_finalize_active(rider_id: String) -> void:
 
 
 func _on_manage_pressed() -> void:
-	OS.shell_open(ApiClient.web_riders_url())
+	# SSO-bridged so the browser opens as the same user the game is.
+	await ApiClient.open_web_link("/riders/")
 
 
 func _on_logout_pressed() -> void:

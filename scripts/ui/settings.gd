@@ -79,7 +79,8 @@ func _on_save() -> void:
 
 
 func _on_manage_riders() -> void:
-	OS.shell_open(ApiClient.web_riders_url())
+	# SSO-bridged so the browser opens as the same user the game is.
+	await ApiClient.open_web_link("/riders/")
 
 
 func _on_back() -> void:

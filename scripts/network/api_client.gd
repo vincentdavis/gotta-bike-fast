@@ -100,6 +100,57 @@ func web_rides_url() -> String:
 	return web_url + "/rides/"
 
 
+func open_web_link(target_path: String) -> void:
+	"""Open a Django web page in the host browser, signed in as the
+	same user the game is authed as. The game has a JWT; the browser
+	has its own (possibly empty, possibly different) Django session —
+	without this bridge the user lands on a blank login form or, worse,
+	someone else's account.
+
+	The bridge is a one-time, 60-second SSO token issued by
+	/api/auth/sso-token. We POST the target path, get back a URL, hand
+	it to the OS browser. If the token endpoint is unreachable (Django
+	down, network blip, user not actually authed) we fall back to the
+	plain URL with the user's email tacked on as ?email=<...> so the
+	login form at least prefills the right account.
+	"""
+	if web_url.is_empty():
+		return
+	# Sanitize: must be a same-origin relative path.
+	var path := target_path
+	if not path.begins_with("/") or path.begins_with("//"):
+		path = "/"
+
+	if _access_token.is_empty():
+		# No JWT to trade — go straight to the login form with the
+		# email prefilled if we happen to have it cached from a prior
+		# session.
+		OS.shell_open(_fallback_login_url(path))
+		return
+
+	var result: Dictionary = await _do_request(
+		"POST", "/api/auth/sso-token", {"next_path": path}, web_url
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		var url: String = str(result["json"].get("url", ""))
+		if not url.is_empty():
+			OS.shell_open(url)
+			return
+	# Token issue failed (Django down, JWT rejected, etc.) — fall
+	# back so the button still does something useful.
+	OS.shell_open(_fallback_login_url(path))
+
+
+func _fallback_login_url(target_path: String) -> String:
+	# /accounts/login/?next=<path>&email=<email>. Reads the cached
+	# user_email so even without a working JWT the form names the
+	# account the player is trying to use.
+	var login_url := web_url + "/accounts/login/?next=" + target_path.uri_encode()
+	if not user_email.is_empty():
+		login_url += "&email=" + user_email.uri_encode()
+	return login_url
+
+
 func logout() -> void:
 	_access_token = ""
 	_refresh_token = ""

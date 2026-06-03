@@ -14,6 +14,8 @@ extends Control
 @onready var status_button: Button = $StatusButton
 @onready var fastapi_dot: ColorRect = $StatusButton/StatusHBox/FastAPIDot
 @onready var web_dot: ColorRect = $StatusButton/StatusHBox/WebDot
+@onready var identity_button: Button = $IdentityButton
+@onready var identity_label: Label = $IdentityButton/IdentityHBox/IdentityLabel
 
 # Same palette as the landing page so the indicator reads consistently
 # across the two surfaces.
@@ -41,12 +43,14 @@ func _ready() -> void:
 	dev_button.pressed.connect(_on_dev_pressed)
 	logout_button.pressed.connect(_on_logout_pressed)
 	status_button.pressed.connect(_on_status_button_pressed)
+	identity_button.pressed.connect(_on_identity_button_pressed)
 
 	# Live server-status indicator pinned to the top-right. ApiClient
 	# polls in the background; we just paint the two dots from the
 	# current status and update on every state flip.
 	ApiClient.connection_status_changed.connect(_on_connection_status_changed)
 	_refresh_status_dots()
+	_refresh_identity_label()
 
 	rider_label.text = "Riding as %s" % GameSession.rider_display_name
 	signed_in_label.text = "Signed in as %s" % ApiClient.user_label()
@@ -63,6 +67,7 @@ func _fetch_user_async() -> void:
 	await ApiClient.get_me()
 	if is_inside_tree():
 		signed_in_label.text = "Signed in as %s" % ApiClient.user_label()
+		_refresh_identity_label()
 
 
 func _set_busy(busy: bool, message: String = "") -> void:
@@ -146,7 +151,10 @@ func _on_join_pressed() -> void:
 func _on_my_games_pressed() -> void:
 	if _busy:
 		return
-	OS.shell_open(ApiClient.web_games_url())
+	# Mint a one-time SSO token so the browser opens already signed in
+	# as the same user the game is using (instead of dumping us on a
+	# blank login form, or worse, into a different account's session).
+	await ApiClient.open_web_link("/games/")
 
 
 func _on_switch_rider_pressed() -> void:
@@ -174,6 +182,23 @@ func _on_status_button_pressed() -> void:
 	# Open the landing page (full pills + retry + dev menu entry). It
 	# can route back here via Continue when both services are OK.
 	get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+
+func _on_identity_button_pressed() -> void:
+	# Bridges to the Django account page already signed-in as the
+	# same user the game is. Lets the player verify which account is
+	# active and manage profile fields without re-typing their password.
+	await ApiClient.open_web_link("/accounts/account/")
+
+
+func _refresh_identity_label() -> void:
+	# Show the most-recognisable identifier we have. user_label() falls
+	# back gracefully: display_name → email → user_id. Truncated so a
+	# very long email doesn't blow out the button width.
+	var label := ApiClient.user_label()
+	if label.length() > 28:
+		label = label.substr(0, 27) + "…"
+	identity_label.text = label if not label.is_empty() else "Signed in"
 
 
 func _on_connection_status_changed(_service: String, _status: int) -> void:
