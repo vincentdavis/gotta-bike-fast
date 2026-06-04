@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="shineA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bgA)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#shineA)"/>
+
+  <!-- motion streaks -->
+  <g fill="#ffffff">
+    <rect x="96"  y="470" width="372" height="36" rx="18" opacity="0.9"/>
+    <rect x="150" y="540" width="300" height="36" rx="18" opacity="0.6"/>
+    <rect x="196" y="610" width="232" height="36" rx="18" opacity="0.4"/>
+  </g>
+
+  <!-- wheel -->
+  <g transform="translate(600,512)">
+    <circle r="300" fill="none" stroke="#ffffff" stroke-width="56"/>
+    <circle r="250" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.45"/>
+    <g stroke="#ffffff" stroke-width="15" stroke-linecap="round" opacity="0.95">
+      <line x1="0" y1="0" x2="0" y2="-246"/>
+      <line x1="0" y1="0" x2="174" y2="-174"/>
+      <line x1="0" y1="0" x2="246" y2="0"/>
+      <line x1="0" y1="0" x2="174" y2="174"/>
+      <line x1="0" y1="0" x2="0" y2="246"/>
+      <line x1="0" y1="0" x2="-174" y2="174"/>
+      <line x1="0" y1="0" x2="-246" y2="0"/>
+      <line x1="0" y1="0" x2="-174" y2="-174"/>
+    </g>
+    <circle r="50" fill="#ffffff"/>
+    <circle r="22" fill="#1d4ed8"/>
+  </g>
+</svg>

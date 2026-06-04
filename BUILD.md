@@ -87,9 +87,12 @@ that built it (or after a manual right-click → Open).
 
 ## Notes
 
-- The Windows exe / macOS app carry the default Godot icon. Custom icons:
-  Windows needs Wine + rcedit (`application/modify_resources=true` +
-  `application/icon=...`); macOS takes an `.icns` via `application/icon`.
+- App icon: the "Speed Wheel" mark lives in `branding/` (source
+  `icon_master.svg`, generated `icon.icns` / `icon.ico`). It's wired into
+  `project.godot` (runtime window/dock icons) and both export presets.
+  The macOS `.app` icon applies correctly. The Windows **.exe file icon**
+  (Explorer) needs `rcedit` + Wine on a Mac host — without it that embed
+  is skipped (the in-game window icon still shows). See `branding/README.md`.
 - Windows SmartScreen / macOS Gatekeeper will warn on unsigned builds.
   Proper signing needs a Windows Authenticode cert / Apple Developer ID
   (out of scope here).

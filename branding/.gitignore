@@ -1,0 +1,6 @@
+# Intermediate render artifacts — regenerate from icon_master.svg (see README).
+preview_*.png
+final_*.png
+previews_strip.png
+icon_1024.png
+icon.iconset/
