@@ -58,13 +58,40 @@ So the `.exe` only works where those are reachable. Options:
   backends somewhere public (e.g. a VPS / Fly.io / Render). Real
   distribution needs the backends hosted — that's a separate task.
 
+## Build the macOS .app
+
+The "macOS" preset (in `export_presets.cfg`) builds a **universal**
+(arm64 + x86_64) `.app`, ad-hoc signed (`codesign/codesign=1`,
+`identity="-"`) so it runs locally without a developer certificate.
+
+Universal/arm64 exports require ETC2 ASTC texture import, enabled
+project-wide via `rendering/textures/vram_compression/import_etc2_astc=true`
+in `project.godot` (already set).
+
+```bash
+GODOT="$HOME/Applications/Godot.app/Contents/MacOS/Godot"
+"$GODOT" --headless --import .                                    # bake resources
+"$GODOT" --headless --export-release "macOS" \
+    "$PWD/build/macos/GottaBikeFast.app"
+```
+
+Output: `build/macos/GottaBikeFast.app` (~178 MB; bigger than Windows
+because it's two architectures + the extra texture format). Double-click
+to run, or `open build/macos/GottaBikeFast.app`.
+
+To distribute to *other* Macs you'd need Apple Developer ID signing +
+notarization (set `codesign/codesign` to rcodesign/Xcode and
+`notarization/notarization`) — otherwise Gatekeeper blocks it with
+"unidentified developer". The ad-hoc build runs only on the machine
+that built it (or after a manual right-click → Open).
+
 ## Notes
 
-- The exe carries the default Godot icon. To embed a custom `.ico` +
-  version metadata on macOS you need Wine + rcedit configured, then set
-  `application/modify_resources=true` and `application/icon=...` in the
-  preset.
-- Windows SmartScreen will warn on an unsigned exe. Code-signing needs
-  a Windows Authenticode cert (out of scope here).
-- Other platforms: add a preset (*Project → Export → Add*) for
-  "macOS"/"Linux/X11" and run `--export-release "<preset name>" <out>`.
+- The Windows exe / macOS app carry the default Godot icon. Custom icons:
+  Windows needs Wine + rcedit (`application/modify_resources=true` +
+  `application/icon=...`); macOS takes an `.icns` via `application/icon`.
+- Windows SmartScreen / macOS Gatekeeper will warn on unsigned builds.
+  Proper signing needs a Windows Authenticode cert / Apple Developer ID
+  (out of scope here).
+- Linux: add a "Linux/X11" preset and run
+  `--export-release "<preset name>" build/linux/GottaBikeFast.x86_64`.
