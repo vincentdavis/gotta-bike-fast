@@ -4,3 +4,7 @@ final_*.png
 previews_strip.png
 icon_1024.png
 icon.iconset/
+
+# Godot import sidecars — the branding source files aren't loaded as
+# in-game resources, so their .import files are throwaway.
+*.import
