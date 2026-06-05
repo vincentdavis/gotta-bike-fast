@@ -252,6 +252,14 @@ func _build_system_tab() -> Control:
 	pad.custom_minimum_size = Vector2(0, 8)
 	root.add_child(pad)
 
+	# Active environment (LOCAL / ALPHA_1 / CUSTOM). Change it in the Dev
+	# menu; the label reflects the current DevSettings selection.
+	var env_label := Label.new()
+	env_label.text = "Environment: %s" % DevSettings.environment
+	env_label.add_theme_font_size_override("font_size", 16)
+	env_label.modulate = Color(0.8, 0.85, 0.95)
+	root.add_child(env_label)
+
 	# Game server (FastAPI) row.
 	var fa := _status_row("Game server")
 	_fastapi_dot = fa["dot"]

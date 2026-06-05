@@ -41,6 +41,21 @@ text = "Service URLs the client talks to. Persisted to user://dev_settings.cfg."
 theme_override_font_sizes/font_size = 14
 modulate = Color(0.75, 0.75, 0.75, 1)
 
+[node name="EnvRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="EnvLabel" type="Label" parent="Margin/VBox/EnvRow"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "Environment"
+theme_override_font_sizes/font_size = 18
+
+[node name="EnvOption" type="OptionButton" parent="Margin/VBox/EnvRow"]
+layout_mode = 2
+custom_minimum_size = Vector2(220, 0)
+theme_override_font_sizes/font_size = 18
+
 [node name="BackendLabel" type="Label" parent="Margin/VBox"]
 layout_mode = 2
 text = "Backend (FastAPI)"

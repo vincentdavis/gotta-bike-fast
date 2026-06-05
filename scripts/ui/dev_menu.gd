@@ -4,6 +4,7 @@ extends Control
 # which also pushes new values into ApiClient and WorldClient so subsequent
 # requests use the new origin immediately (no restart needed).
 
+@onready var env_option: OptionButton = $Margin/VBox/EnvRow/EnvOption
 @onready var backend_input: LineEdit = $Margin/VBox/BackendInput
 @onready var web_input: LineEdit = $Margin/VBox/WebInput
 @onready var ws_input: LineEdit = $Margin/VBox/WSInput
@@ -13,34 +14,79 @@ extends Control
 @onready var reset_button: Button = $Margin/VBox/ButtonRow/ResetButton
 @onready var back_button: Button = $Margin/VBox/ButtonRow/BackButton
 
+# Index in the OptionButton == index in this list (built in _ready).
+var _env_names: Array = []
+
 
 func _ready() -> void:
+	_build_env_options()
 	_populate_from_settings()
+	env_option.item_selected.connect(_on_env_selected)
+	# Hand-editing a URL means we've diverged from a preset → show CUSTOM.
+	backend_input.text_changed.connect(_on_url_edited)
+	web_input.text_changed.connect(_on_url_edited)
+	ws_input.text_changed.connect(_on_url_edited)
 	save_button.pressed.connect(_on_save)
 	test_button.pressed.connect(_on_test)
 	reset_button.pressed.connect(_on_reset)
 	back_button.pressed.connect(_on_back)
 
 
+func _build_env_options() -> void:
+	env_option.clear()
+	_env_names = DevSettings.environment_names()
+	for name in _env_names:
+		env_option.add_item(str(name))
+
+
 func _populate_from_settings() -> void:
 	backend_input.text = DevSettings.base_url
 	web_input.text = DevSettings.web_url
 	ws_input.text = DevSettings.ws_url
+	_select_env_in_dropdown(DevSettings.environment)
+
+
+func _select_env_in_dropdown(name: String) -> void:
+	var idx := _env_names.find(name)
+	if idx >= 0:
+		env_option.select(idx)
+
+
+func _on_env_selected(idx: int) -> void:
+	var name := str(_env_names[idx])
+	if name == DevSettings.CUSTOM:
+		status_label.text = "Custom — edit the URLs below and Save."
+		return
+	# Apply the preset immediately so it's live without a separate Save.
+	DevSettings.apply_environment(name)
+	backend_input.text = DevSettings.base_url
+	web_input.text = DevSettings.web_url
+	ws_input.text = DevSettings.ws_url
+	status_label.text = "Now using %s." % name
+
+
+func _on_url_edited(_new_text: String) -> void:
+	# Reflect that the current fields may no longer match the selected
+	# preset. Doesn't persist until Save.
+	_select_env_in_dropdown(DevSettings.CUSTOM)
 
 
 func _on_save() -> void:
-	DevSettings.base_url = backend_input.text.strip_edges()
-	DevSettings.web_url = web_input.text.strip_edges()
-	DevSettings.ws_url = ws_input.text.strip_edges()
-	DevSettings.save()
-	status_label.text = "Saved."
+	# set_custom_urls re-detects whether the typed URLs match a known
+	# preset and records that env name instead of CUSTOM if so.
+	DevSettings.set_custom_urls(
+		backend_input.text.strip_edges(),
+		web_input.text.strip_edges(),
+		ws_input.text.strip_edges(),
+	)
+	_select_env_in_dropdown(DevSettings.environment)
+	status_label.text = "Saved (%s)." % DevSettings.environment
 
 
 func _on_reset() -> void:
 	DevSettings.reset_to_defaults()
-	DevSettings.save()
 	_populate_from_settings()
-	status_label.text = "Reset to defaults and saved."
+	status_label.text = "Reset to %s and saved." % DevSettings.DEFAULT_ENV
 
 
 func _on_test() -> void:
