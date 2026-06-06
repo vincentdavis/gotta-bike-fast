@@ -2,10 +2,10 @@
 .godot/
 /android/
 
-# Per-project export settings (often carry machine-local paths or signing
-# identity references; Godot also writes secrets to a sibling
-# export_credentials.cfg). Reconfigure locally via Project → Export.
-export_presets.cfg
+# export_presets.cfg IS committed — CI (GitHub Actions) needs it to export,
+# and it carries no secrets (just preset names, icon paths, bundle id).
+# Signing certs / passwords live in export_credentials.cfg, which stays
+# ignored.
 export_credentials.cfg
 
 # macOS

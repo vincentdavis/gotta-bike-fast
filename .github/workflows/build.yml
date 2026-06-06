@@ -1,0 +1,104 @@
+name: Build (macOS + Windows)
+
+# Exports the game for macOS and Windows on every push to main (and on
+# demand). Each platform builds natively on its own runner — that's the
+# structure we'll reuse to freeze the BLE sensor bridge per-OS later.
+# Artifacts are downloadable from the workflow run summary.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.6.3"
+
+jobs:
+  export:
+    name: Export ${{ matrix.preset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            preset: "macOS"
+            out: build/macos/GottaBikeFast.app
+            artifact: GottaBikeFast-macos
+          - os: windows-latest
+            preset: "Windows Desktop"
+            out: build/windows/GottaBikeFast.exe
+            artifact: GottaBikeFast-windows
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} + export templates
+        run: |
+          set -euo pipefail
+          V="${GODOT_VERSION}"
+          base="https://github.com/godotengine/godot/releases/download/${V}-stable"
+
+          # zip extractor that works on both runners (git-bash tar can't do zip).
+          extract() { # <zipfile> [destdir]
+            if [ "${RUNNER_OS}" = "Windows" ]; then
+              7z x -y -o"${2:-.}" "$1" >/dev/null
+            else
+              if [ -n "${2:-}" ]; then unzip -q "$1" -d "$2"; else unzip -q "$1"; fi
+            fi
+          }
+
+          curl -fL --retry 5 -o templates.tpz "${base}/Godot_v${V}-stable_export_templates.tpz"
+          extract templates.tpz _tpl
+
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            curl -fL --retry 5 -o godot.zip "${base}/Godot_v${V}-stable_macos.universal.zip"
+            extract godot.zip
+            xattr -dr com.apple.quarantine Godot.app || true
+            echo "GODOT=$PWD/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+            tpl="$HOME/Library/Application Support/Godot/export_templates/${V}.stable"
+          else
+            curl -fL --retry 5 -o godot.zip "${base}/Godot_v${V}-stable_win64.exe.zip"
+            extract godot.zip
+            echo "GODOT=$PWD/Godot_v${V}-stable_win64.exe" >> "$GITHUB_ENV"
+            tpl="$(cygpath -u "$APPDATA")/Godot/export_templates/${V}.stable"
+          fi
+          mkdir -p "$tpl"
+          cp -R _tpl/templates/. "$tpl/"
+          echo "Installed templates -> $tpl"
+
+      - name: Import project
+        run: |
+          # First import populates .godot/ (may exit non-zero); second is clean.
+          "$GODOT" --headless --import . 2>&1 | tail -n 20 || true
+          "$GODOT" --headless --import . 2>&1 | tail -n 5  || true
+
+      - name: Export "${{ matrix.preset }}"
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${{ matrix.out }}")"
+          rm -rf "${{ matrix.out }}"
+          "$GODOT" --headless --export-release "${{ matrix.preset }}" "$PWD/${{ matrix.out }}"
+          test -e "${{ matrix.out }}" || { echo "::error::export produced no output for ${{ matrix.preset }}"; exit 1; }
+
+      - name: Package macOS .app
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent build/macos/GottaBikeFast.app GottaBikeFast-macos.zip
+
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: GottaBikeFast-macos.zip
+          if-no-files-found: error
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/windows/GottaBikeFast.exe
+          if-no-files-found: error
