@@ -40,6 +40,7 @@ var _header_identity: Label
 var _solo_button: Button
 var _create_button: Button
 var _join_button: Button
+var _sensors_button: Button
 var _ride_status: Label
 
 # Rider tab
@@ -157,6 +158,14 @@ func _build_ride_tab() -> Control:
 	_join_button = _big_button("Join Game")
 	_join_button.pressed.connect(_on_join_pressed)
 	root.add_child(_join_button)
+
+	# Power source / sensor pairing. Shows the current source and opens the
+	# Sensors screen. Always available — keyboard is the default.
+	_sensors_button = Button.new()
+	_sensors_button.text = _power_source_text()
+	_sensors_button.add_theme_font_size_override("font_size", 16)
+	_sensors_button.pressed.connect(_on_sensors_pressed)
+	root.add_child(_sensors_button)
 
 	_ride_status = Label.new()
 	_ride_status.add_theme_font_size_override("font_size", 16)
@@ -869,3 +878,14 @@ func _on_join_pressed() -> void:
 	if _busy:
 		return
 	get_tree().change_scene_to_file("res://scenes/join.tscn")
+
+
+func _power_source_text() -> String:
+	var src := "Sensor (Bluetooth)" if SensorBridge.using_sensor() else "Keyboard"
+	return "Power source: %s   (change)" % src
+
+
+func _on_sensors_pressed() -> void:
+	if _busy:
+		return
+	get_tree().change_scene_to_file("res://scenes/sensors.tscn")

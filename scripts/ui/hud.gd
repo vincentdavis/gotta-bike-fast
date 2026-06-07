@@ -1,7 +1,10 @@
 extends CanvasLayer
 
 @onready var power_label: Label = $VBox/PowerLabel
+@onready var cadence_label: Label = $VBox/CadenceLabel
 @onready var speed_label: Label = $VBox/SpeedLabel
+@onready var heart_rate_label: Label = $VBox/HeartRateLabel
+@onready var trainer_label: Label = $VBox/TrainerLabel
 @onready var distance_label: Label = $VBox/DistanceLabel
 @onready var lap_label: Label = $VBox/LapLabel
 @onready var grade_label: Label = $VBox/GradeLabel
@@ -18,8 +21,39 @@ extends CanvasLayer
 @onready var minimap_marker: ColorRect = $MinimapPanel/Margin/VBox/MapBox/RiderMarker
 
 
-func set_power(w: float) -> void:
-	power_label.text = "Power: %d W" % int(round(w))
+func set_power(w: float, from_sensor: bool = false) -> void:
+	# A small "(sensor)" tag flags when the watts are coming off a paired
+	# power meter rather than the keyboard ramp.
+	var tag := "  (sensor)" if from_sensor else ""
+	power_label.text = "Power: %d W%s" % [int(round(w)), tag]
+
+
+func set_cadence(rpm: float) -> void:
+	# Negative rpm means "no fresh cadence source" — collapse the row so it
+	# doesn't leave a blank gap in the stat list.
+	if rpm < 0.0:
+		cadence_label.visible = false
+	else:
+		cadence_label.visible = true
+		cadence_label.text = "Cadence: %d rpm" % int(round(rpm))
+
+
+func set_heart_rate(bpm: int) -> void:
+	# 0 (or less) means "no fresh heart-rate source" — collapse the row.
+	if bpm <= 0:
+		heart_rate_label.visible = false
+	else:
+		heart_rate_label.visible = true
+		heart_rate_label.text = "HR: %d bpm" % bpm
+
+
+func set_trainer(text: String) -> void:
+	# Empty text means no controllable trainer — collapse the row.
+	if text.is_empty():
+		trainer_label.visible = false
+	else:
+		trainer_label.visible = true
+		trainer_label.text = "Trainer: %s" % text
 
 
 func set_speed(mps: float) -> void:

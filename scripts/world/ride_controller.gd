@@ -19,6 +19,7 @@ const RIDER_GROUND_CLEARANCE := 0.07
 const SAMPLE_HZ := 4.0
 const SAMPLE_FLUSH_S := 5.0
 const WORLD_STATE_HZ := 10.0  # outbound multiplayer state rate
+const TRAINER_SEND_HZ := 3.0  # grade updates to a smart trainer in SIM mode
 const PLAYER_COLOR := Color(0.85, 0.20, 0.15)
 const GHOST_COLOR := Color(0.15, 0.40, 0.85)
 const DRAFT_MAX_DISTANCE_M := 10.0
@@ -68,6 +69,7 @@ var _ghost_bibs: Dictionary = {}  # rider_id -> bib_number
 var _ghost_distances: Dictionary = {}  # rider_id -> latest reported distance_m
 var _my_bib: int = 0
 var _world_state_accum_s: float = 0.0
+var _trainer_accum_s: float = 0.0
 # Course path: list of {distance_m, x_m, y_m, elevation_m}. Populated from
 # Course.path when the server provides it; otherwise synthesized as a
 # straight path along world -Z so legacy elevation-only courses still work.
@@ -1390,10 +1392,36 @@ func _process(delta: float) -> void:
 	_update_ghost_visuals(delta)
 	if not is_riding:
 		return
+	_update_power_input(delta)
+
+
+func _update_power_input(delta: float) -> void:
+	# Sensor power takes over only when the player selected SENSOR *and* a
+	# live reading is fresh. Otherwise the keyboard ↑/↓ ramp stays in
+	# control — so an unplugged bridge or a dropped sensor transparently
+	# falls back to the keyboard, continuing from the last value with no
+	# jump. The keyboard is always the default and the fallback.
+	if SensorBridge.using_sensor() and SensorBridge.has_fresh_power():
+		target_power_w = clampf(SensorBridge.latest_power_w, 0.0, MAX_POWER_W)
+		return
 	if Input.is_key_pressed(KEY_UP):
 		target_power_w = min(target_power_w + POWER_RATE_WPS * delta, MAX_POWER_W)
 	if Input.is_key_pressed(KEY_DOWN):
 		target_power_w = max(target_power_w - POWER_RATE_WPS * delta, 0.0)
+
+
+func _trainer_hud_text() -> String:
+	# Small HUD tag showing the smart-trainer control mode, if a controllable
+	# trainer is connected. Empty string hides the row.
+	if not SensorBridge.trainer_available:
+		return ""
+	match SensorBridge.trainer_mode:
+		SensorBridge.TrainerMode.SIM:
+			return "SIM"
+		SensorBridge.TrainerMode.ERG:
+			return "ERG %d W" % SensorBridge.erg_target_w
+		_:
+			return "off"
 
 
 # --- Physics tick ---
@@ -1492,8 +1520,22 @@ func _physics_process(delta: float) -> void:
 			}
 		)
 
-	hud.set_power(target_power_w)
+	# Stream the live grade to a smart trainer in SIM mode so resistance
+	# follows the road. `gradient` is already 0 in the pre-race pen, so the
+	# trainer stays flat until the race starts. The bridge throttles
+	# redundant writes; we just tick at a steady low rate here.
+	_trainer_accum_s += delta
+	if _trainer_accum_s >= 1.0 / TRAINER_SEND_HZ:
+		_trainer_accum_s = 0.0
+		if SensorBridge.trainer_mode == SensorBridge.TrainerMode.SIM:
+			SensorBridge.send_sim_grade(gradient * 100.0, kit.tires.crr)
+
+	var sensor_power: bool = SensorBridge.using_sensor() and SensorBridge.has_fresh_power()
+	hud.set_power(target_power_w, sensor_power)
+	hud.set_trainer(_trainer_hud_text())
 	hud.set_speed(velocity_mps)
+	hud.set_cadence(SensorBridge.latest_cadence_rpm if SensorBridge.has_fresh_cadence() else -1.0)
+	hud.set_heart_rate(SensorBridge.latest_hr_bpm if SensorBridge.has_fresh_hr() else 0)
 	hud.set_distance(distance_m)
 	var course_length := float(current_course.get("length_m", 0.0))
 	if course_length > 0.0:
@@ -1640,6 +1682,9 @@ func _finish_ride() -> void:
 		return
 	_finishing = true
 	is_riding = false
+	# Hand trainer resistance back to flat so the rider isn't left pushing
+	# against the last climb's grade after the ride ends.
+	SensorBridge.release_trainer()
 	WorldClient.disconnect_now()
 	hud.set_status("Finishing ride…")
 

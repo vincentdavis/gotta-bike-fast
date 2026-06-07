@@ -1,0 +1,11 @@
+# uv-managed virtualenv
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frozen-bridge build output (milestone: per-OS PyInstaller binaries)
+dist/
+build/

@@ -69,9 +69,25 @@ theme_override_constants/separation = 4
 text = "Power: 0 W"
 theme_override_font_sizes/font_size = 24
 
+[node name="CadenceLabel" type="Label" parent="VBox"]
+visible = false
+text = ""
+theme_override_font_sizes/font_size = 24
+
 [node name="SpeedLabel" type="Label" parent="VBox"]
 text = "Speed: 0.0 km/h"
 theme_override_font_sizes/font_size = 24
+
+[node name="HeartRateLabel" type="Label" parent="VBox"]
+visible = false
+text = ""
+theme_override_font_sizes/font_size = 24
+
+[node name="TrainerLabel" type="Label" parent="VBox"]
+visible = false
+text = ""
+theme_override_font_sizes/font_size = 18
+modulate = Color(0.6, 0.85, 1, 1)
 
 [node name="DistanceLabel" type="Label" parent="VBox"]
 text = "Distance: 0 m"

@@ -23,6 +23,7 @@ DevSettings="*res://scripts/network/dev_settings.gd"
 ApiClient="*res://scripts/network/api_client.gd"
 WorldClient="*res://scripts/network/world_client.gd"
 GameSession="*res://scripts/network/game_session.gd"
+SensorBridge="*res://scripts/network/sensor_bridge.gd"
 
 [physics]
 
