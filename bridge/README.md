@@ -12,10 +12,24 @@ whenever no live sensor feed is selected or a sensor drops out.
 
 Why a separate process? `bleak` is cross-platform (CoreBluetooth on macOS,
 WinRT on Windows, BlueZ on Linux) but is Python, not GDScript. Running it
-beside the game keeps the Godot build pure and lets the same per-OS CI that
-builds the game later freeze this bridge into a binary.
+beside the game keeps the Godot build pure. Requires **Python ≥ 3.14**.
+
+## Packaged builds (end users)
+
+The installable artifacts from CI **bundle a frozen copy of this bridge** and
+the game **launches it automatically** — no Python or `uv` required:
+
+- **macOS** `.dmg` → the bridge lives at
+  `GottaBikeFast.app/Contents/Resources/bridge/gbf-bridge`.
+- **Windows** installer / portable zip → `gbf-bridge.exe` sits next to
+  `GottaBikeFast.exe`.
+
+The game spawns it on demand (when you enable sensors) and shuts it down on
+exit. Just open **Ride → Sensors** and pair.
 
 ## Run it (dev)
+
+In the editor the game does **not** auto-launch the bridge — run it yourself:
 
 ```bash
 cd bridge
@@ -26,6 +40,17 @@ uv run gbf-bridge --port 9000
 
 Then in the game: **Ride → Sensors**, choose **Sensor** as the power source,
 **Scan**, and **Connect** your meter / strap.
+
+## Freeze a standalone binary
+
+```bash
+cd bridge
+uv sync --group build
+uv run --group build pyinstaller gbf-bridge.spec --noconfirm   # -> dist/gbf-bridge[.exe]
+```
+
+CI does this per-OS and bundles the result into the installers. The binary
+matches the build machine's architecture (CI macOS runners are arm64).
 
 ### macOS Bluetooth permission
 

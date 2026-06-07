@@ -67,6 +67,12 @@ var _last_state: int = WebSocketPeer.STATE_CLOSED
 var _want_connected: bool = false  # keep (re)connecting while true
 var _reconnect_accum: float = RECONNECT_INTERVAL_S
 
+# In exported builds we auto-launch the bundled bridge binary so packaged
+# users never run a terminal. _bridge_pid is the process we spawned (-1 if
+# none); killed on exit so it doesn't outlive the game.
+var _spawn_attempted: bool = false
+var _bridge_pid: int = -1
+
 
 func _ready() -> void:
 	_load()
@@ -86,6 +92,7 @@ func ensure_connected() -> void:
 	# Ask the autoload to maintain a connection to the bridge (used by the
 	# Sensors screen and when SENSOR is selected). Safe to call repeatedly.
 	_want_connected = true
+	_maybe_spawn_bridge()
 	if _peer == null:
 		_reconnect_accum = RECONNECT_INTERVAL_S  # connect on the next frame
 		_open()
@@ -227,6 +234,51 @@ func _open() -> void:
 		_peer = null
 		return
 	_last_state = WebSocketPeer.STATE_CONNECTING
+
+
+func _bridge_binary_path() -> String:
+	# Where the bundled bridge binary lives in an exported build. Empty in
+	# the editor — in dev you run `uv run gbf-bridge` yourself.
+	if OS.has_feature("editor"):
+		return ""
+	var exe_dir := OS.get_executable_path().get_base_dir()
+	if OS.has_feature("macos"):
+		# <game>.app/Contents/MacOS/<exe> → .app/Contents/Resources/bridge/gbf-bridge
+		return exe_dir.path_join("../Resources/bridge/gbf-bridge").simplify_path()
+	if OS.has_feature("windows"):
+		return exe_dir.path_join("gbf-bridge.exe")
+	return exe_dir.path_join("gbf-bridge")
+
+
+func _maybe_spawn_bridge() -> void:
+	# Launch the bundled bridge once per session. No-op in the editor or when
+	# the binary isn't present (dev), so a manually-run bridge is never
+	# disturbed; a second instance would just fail to bind and exit anyway.
+	if _spawn_attempted:
+		return
+	var path := _bridge_binary_path()
+	if path.is_empty() or not FileAccess.file_exists(path):
+		return
+	_spawn_attempted = true
+	var args := PackedStringArray()
+	var port := _port_from_url(bridge_url)
+	if port > 0:
+		args.append("--port")
+		args.append(str(port))
+	_bridge_pid = OS.create_process(path, args)
+
+
+func _port_from_url(url: String) -> int:
+	var idx := url.rfind(":")
+	if idx < 0:
+		return 0
+	return url.substr(idx + 1).to_int()
+
+
+func _exit_tree() -> void:
+	# Don't let a bridge we launched outlive the game.
+	if _bridge_pid > 0 and OS.is_process_running(_bridge_pid):
+		OS.kill(_bridge_pid)
 
 
 func _send(msg: Dictionary) -> void:

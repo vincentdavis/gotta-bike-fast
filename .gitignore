@@ -17,3 +17,4 @@ export_credentials.cfg
 
 # Build / export output
 build/
+dist_pkg/

@@ -3,7 +3,7 @@ name = "gbf-bridge"
 version = "0.1.0"
 description = "Gotta Bike Fast — BLE sensor bridge (bleak → localhost WebSocket)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
     "bleak>=0.22",
     "websockets>=12",
@@ -14,6 +14,9 @@ gbf-bridge = "gbf_bridge.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# Freezing the bridge into a standalone binary is heavier than the test
+# deps, so it lives in its own group (CI: `uv sync --group build`).
+build = ["pyinstaller>=6.11"]
 
 [build-system]
 requires = ["hatchling"]

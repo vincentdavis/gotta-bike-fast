@@ -1,9 +1,9 @@
 name: Build (macOS + Windows)
 
-# Exports the game for macOS and Windows on every push to main (and on
-# demand). Each platform builds natively on its own runner — that's the
-# structure we'll reuse to freeze the BLE sensor bridge per-OS later.
-# Artifacts are downloadable from the workflow run summary.
+# Exports the game AND packages installable artifacts on every push to main
+# (and on demand): a macOS .dmg and a Windows installer, each bundling the
+# frozen BLE sensor bridge (PyInstaller, Python 3.14) so end users need
+# neither Python nor uv. Each platform builds natively on its own runner.
 
 on:
   push:
@@ -15,7 +15,7 @@ env:
 
 jobs:
   export:
-    name: Export ${{ matrix.preset }}
+    name: Package ${{ matrix.preset }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +35,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # --- Freeze the BLE sensor bridge into a standalone binary ---
+      - name: Set up uv + Python 3.14
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+
+      - name: Freeze the BLE bridge (PyInstaller)
+        working-directory: bridge
+        run: |
+          set -euo pipefail
+          uv sync --group build
+          uv run --group build pyinstaller gbf-bridge.spec --noconfirm
+          ls -la dist
+
+      # --- Export the game with Godot ---
       - name: Install Godot ${{ env.GODOT_VERSION }} + export templates
         run: |
           set -euo pipefail
@@ -83,22 +98,66 @@ jobs:
           "$GODOT" --headless --export-release "${{ matrix.preset }}" "$PWD/${{ matrix.out }}"
           test -e "${{ matrix.out }}" || { echo "::error::export produced no output for ${{ matrix.preset }}"; exit 1; }
 
-      - name: Package macOS .app
+      # --- Bundle the bridge + build installable packages ---
+      - name: Bundle bridge + build .dmg (macOS)
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent build/macos/GottaBikeFast.app GottaBikeFast-macos.zip
+        run: |
+          set -euo pipefail
+          APP="build/macos/GottaBikeFast.app"
+          # Embed the frozen bridge inside the app bundle.
+          mkdir -p "$APP/Contents/Resources/bridge"
+          cp bridge/dist/gbf-bridge "$APP/Contents/Resources/bridge/gbf-bridge"
+          chmod +x "$APP/Contents/Resources/bridge/gbf-bridge"
+          # Declare Bluetooth usage so CoreBluetooth prompts (instead of
+          # silently failing) when the bridge accesses BLE.
+          PLIST="$APP/Contents/Info.plist"
+          DESC="Gotta Bike Fast reads BLE cycling sensors (power, heart rate, trainer)."
+          /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string \"$DESC\"" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :NSBluetoothAlwaysUsageDescription \"$DESC\"" "$PLIST"
+          # We modified the bundle after Godot signed it — re-sign ad-hoc so
+          # the embedded bridge is covered by the signature.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP" || true
+          # Build the .dmg (drag-to-Applications install).
+          mkdir -p dist_pkg
+          hdiutil create -volname "Gotta Bike Fast" -srcfolder "$APP" \
+            -ov -format UDZO dist_pkg/GottaBikeFast.dmg
+          ls -la dist_pkg
 
-      - name: Upload macOS artifact
+      - name: Bundle bridge + portable zip (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          mkdir -p dist_pkg/app
+          cp build/windows/GottaBikeFast.exe dist_pkg/app/GottaBikeFast.exe
+          cp bridge/dist/gbf-bridge.exe dist_pkg/app/gbf-bridge.exe
+          # Portable zip (unzip and run) — always works as a fallback.
+          (cd dist_pkg && 7z a -tzip GottaBikeFast-windows-portable.zip ./app/* >/dev/null)
+          ls -la dist_pkg
+
+      - name: Build installer (Inno Setup, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\installer.iss
+          Get-ChildItem dist_pkg
+
+      # --- Upload installable artifacts ---
+      - name: Upload macOS installer (.dmg)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: GottaBikeFast-macos.zip
+          path: dist_pkg/GottaBikeFast.dmg
           if-no-files-found: error
 
-      - name: Upload Windows artifact
+      - name: Upload Windows installer + portable
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: build/windows/GottaBikeFast.exe
+          path: |
+            dist_pkg/GottaBikeFast-Setup.exe
+            dist_pkg/GottaBikeFast-windows-portable.zip
           if-no-files-found: error
