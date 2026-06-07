@@ -12,6 +12,10 @@ on:
 
 env:
   GODOT_VERSION: "4.6.3"
+  # Run the JS actions (checkout / upload-artifact / setup-uv) on Node 24 so
+  # they don't emit the Node-20 deprecation warning. GitHub forces this
+  # globally on 2026-06-16; opting in early just silences it now.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   export:
@@ -104,6 +108,14 @@ jobs:
         run: |
           set -euo pipefail
           APP="build/macos/GottaBikeFast.app"
+          # Apple Silicon only: thin the universal engine binary to arm64.
+          # Official Godot templates ship a universal binary (no per-arch
+          # slice), so we export universal and drop the Intel slice here.
+          BIN="$(ls "$APP/Contents/MacOS/"* | head -1)"
+          if lipo -archs "$BIN" | grep -q x86_64; then
+            lipo "$BIN" -thin arm64 -output "$BIN.arm64"
+            mv "$BIN.arm64" "$BIN"
+          fi
           # Embed the frozen bridge inside the app bundle.
           mkdir -p "$APP/Contents/Resources/bridge"
           cp bridge/dist/gbf-bridge "$APP/Contents/Resources/bridge/gbf-bridge"

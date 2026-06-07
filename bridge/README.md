@@ -19,7 +19,7 @@ beside the game keeps the Godot build pure. Requires **Python ≥ 3.14**.
 The installable artifacts from CI **bundle a frozen copy of this bridge** and
 the game **launches it automatically** — no Python or `uv` required:
 
-- **macOS** `.dmg` → the bridge lives at
+- **macOS** `.dmg` (Apple Silicon only) → the bridge lives at
   `GottaBikeFast.app/Contents/Resources/bridge/gbf-bridge`.
 - **Windows** installer / portable zip → `gbf-bridge.exe` sits next to
   `GottaBikeFast.exe`.
