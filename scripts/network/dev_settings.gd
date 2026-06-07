@@ -11,7 +11,9 @@ extends Node
 
 const FILE := "user://dev_settings.cfg"
 const CUSTOM := "CUSTOM"
-const DEFAULT_ENV := "LOCAL"
+# Shipped default: the hosted ALPHA_1 (Railway) servers, so a fresh install
+# works out of the box. Switch to LOCAL in the in-game Dev menu for dev.
+const DEFAULT_ENV := "ALPHA_1"
 
 # name -> { base_url (FastAPI), web_url (Django), ws_url (FastAPI WebSocket) }
 const ENVIRONMENTS := {
@@ -47,7 +49,7 @@ func environment_names() -> Array:
 func _load() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(FILE) != OK:
-		# Fresh install — keep the LOCAL defaults set above.
+		# Fresh install — keep the ALPHA_1 defaults set above.
 		return
 	var saved_base := str(cfg.get_value("urls", "base_url", ""))
 	var saved_web := str(cfg.get_value("urls", "web_url", ""))
@@ -64,12 +66,13 @@ func _load() -> void:
 		web_url = str(preset["web_url"])
 		ws_url = str(preset["ws_url"])
 	else:
-		# CUSTOM (or unknown) — use whatever was saved, falling back to LOCAL.
+		# CUSTOM (or unknown) — use whatever was saved, falling back to the
+		# default env's URLs for any field that's blank.
 		environment = CUSTOM
-		var local: Dictionary = ENVIRONMENTS[DEFAULT_ENV]
-		base_url = saved_base if not saved_base.is_empty() else str(local["base_url"])
-		web_url = saved_web if not saved_web.is_empty() else str(local["web_url"])
-		ws_url = saved_ws if not saved_ws.is_empty() else str(local["ws_url"])
+		var fallback: Dictionary = ENVIRONMENTS[DEFAULT_ENV]
+		base_url = saved_base if not saved_base.is_empty() else str(fallback["base_url"])
+		web_url = saved_web if not saved_web.is_empty() else str(fallback["web_url"])
+		ws_url = saved_ws if not saved_ws.is_empty() else str(fallback["ws_url"])
 
 
 func _infer_env(base: String, web: String, ws: String) -> String:
