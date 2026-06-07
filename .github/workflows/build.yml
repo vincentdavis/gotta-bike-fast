@@ -169,3 +169,30 @@ jobs:
             dist_pkg/GottaBikeFast-Setup.exe
             dist_pkg/GottaBikeFast-windows-portable.zip
           if-no-files-found: error
+
+  # Publish a GitHub Release with both installers once both platforms build.
+  # Runs on every push to main, so each green build is a downloadable,
+  # permanently-linked release (Actions artifacts expire; releases don't).
+  release:
+    name: Release
+    needs: export
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the tag + release
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          tag_name: v0.1.0-build.${{ github.run_number }}
+          name: Build ${{ github.run_number }} (v0.1.0)
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/GottaBikeFast-macos/*
+            artifacts/GottaBikeFast-windows/*
