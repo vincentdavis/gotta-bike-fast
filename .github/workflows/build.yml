@@ -12,10 +12,6 @@ on:
 
 env:
   GODOT_VERSION: "4.6.3"
-  # Run the JS actions (checkout / upload-artifact / setup-uv) on Node 24 so
-  # they don't emit the Node-20 deprecation warning. GitHub forces this
-  # globally on 2026-06-16; opting in early just silences it now.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   export:
@@ -37,11 +33,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # --- Freeze the BLE sensor bridge into a standalone binary ---
       - name: Set up uv + Python 3.14
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.14"
 
@@ -158,7 +154,7 @@ jobs:
       # --- Upload installable artifacts ---
       - name: Upload macOS installer (.dmg)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist_pkg/GottaBikeFast.dmg
@@ -166,7 +162,7 @@ jobs:
 
       - name: Upload Windows installer + portable
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
