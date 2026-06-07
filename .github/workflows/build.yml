@@ -33,11 +33,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.3
 
       # --- Freeze the BLE sensor bridge into a standalone binary ---
       - name: Set up uv + Python 3.14
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           python-version: "3.14"
 
@@ -154,7 +154,7 @@ jobs:
       # --- Upload installable artifacts ---
       - name: Upload macOS installer (.dmg)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: dist_pkg/GottaBikeFast.dmg
@@ -162,7 +162,7 @@ jobs:
 
       - name: Upload Windows installer + portable
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: |
