@@ -608,29 +608,80 @@ func _compute_waypoint_frames() -> void:
 
 
 func _setup_ground_strip() -> void:
-	# Wide green ribbon that follows the path's elevation. Without this
-	# the flat ground plane sits at y=0 and the climbing road appears to
-	# hover above it. Width is generous enough that the strip covers the
-	# visible foreground on either side of the road for typical courses.
-	const STRIP_HALF_WIDTH := 120.0
-	if _course_path.size() < 2 or _waypoint_rights.size() < 2:
+	# Path-following backdrop ground used until (or instead of) the real
+	# heightmap terrain. Built as a RASTERIZED heightfield — a grid whose
+	# cells take the elevation of the nearest path point (minus a road-bed
+	# drop), fading toward the flat y=0 plane with distance. The previous
+	# approach (a 120 m-wide ribbon swept along the path) self-overlapped
+	# on any bend tighter than its half-width, and overlap pieces from
+	# higher waypoints buried stretches of road ("road disappears" on real
+	# GPX courses). A grid cannot self-overlap, and the nearest-point drop
+	# keeps the road proud of the ground by construction.
+	const REACH_M := 170.0  # ground influence radius around the path
+	const DROP_M := 0.35    # ground sits this far below the road bed
+	if _course_path.size() < 2:
 		return
+
+	# Grid over the path bbox + margin. Spacing adapts so big routes keep
+	# a sane vertex count (~200 cells along the larger side).
+	var min_x := INF; var max_x := -INF
+	var min_y := INF; var max_y := -INF
+	for p in _course_path:
+		min_x = minf(min_x, float(p["x_m"])); max_x = maxf(max_x, float(p["x_m"]))
+		min_y = minf(min_y, float(p["y_m"])); max_y = maxf(max_y, float(p["y_m"]))
+	min_x -= REACH_M; max_x += REACH_M
+	min_y -= REACH_M; max_y += REACH_M
+	var extent := maxf(max_x - min_x, max_y - min_y)
+	var g := maxf(15.0, ceilf(extent / 200.0 / 5.0) * 5.0)
+	var w := int(ceil((max_x - min_x) / g)) + 1
+	var h := int(ceil((max_y - min_y) / g)) + 1
+
+	# Stamp nearest-path-point elevation + falloff weight per cell (same
+	# pattern as the road-corridor carve): nearest path point wins.
+	var wgt := PackedFloat32Array()
+	wgt.resize(w * h)
+	var ele := PackedFloat32Array()
+	ele.resize(w * h)
+	var reach_cells := int(ceil(REACH_M / g)) + 1
+	for p in _course_path:
+		var cx := (float(p["x_m"]) - min_x) / g
+		var cy := (float(p["y_m"]) - min_y) / g
+		var target := float(p["elevation_m"]) - DROP_M
+		var ix0 := maxi(int(floor(cx)) - reach_cells, 0)
+		var ix1 := mini(int(floor(cx)) + reach_cells, w - 1)
+		var iy0 := maxi(int(floor(cy)) - reach_cells, 0)
+		var iy1 := mini(int(floor(cy)) + reach_cells, h - 1)
+		for iy in range(iy0, iy1 + 1):
+			for ix in range(ix0, ix1 + 1):
+				var dx := (float(ix) - cx) * g
+				var dy := (float(iy) - cy) * g
+				var dist := sqrt(dx * dx + dy * dy)
+				if dist >= REACH_M:
+					continue
+				var s := 1.0 - smoothstep(0.0, REACH_M, dist)
+				var idx := iy * w + ix
+				if s > wgt[idx]:
+					wgt[idx] = s
+					ele[idx] = target
+
+	# Mesh it exactly like the terrain heightfield (clockwise fronts).
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in range(_course_path.size() - 1):
-		var p0: Dictionary = _course_path[i]
-		var p1: Dictionary = _course_path[i + 1]
-		var c0 := Vector3(float(p0["x_m"]), float(p0["elevation_m"]), -float(p0["y_m"]))
-		var c1 := Vector3(float(p1["x_m"]), float(p1["elevation_m"]), -float(p1["y_m"]))
-		var r0: Vector3 = _waypoint_rights[i]
-		var r1: Vector3 = _waypoint_rights[i + 1]
-		var l0 := c0 - r0 * STRIP_HALF_WIDTH
-		var rr0 := c0 + r0 * STRIP_HALF_WIDTH
-		var l1 := c1 - r1 * STRIP_HALF_WIDTH
-		var rr1 := c1 + r1 * STRIP_HALF_WIDTH
-		# Godot fronts are clockwise-from-camera; this order yields +Y normals.
-		st.add_vertex(l0); st.add_vertex(l1); st.add_vertex(rr0)
-		st.add_vertex(rr0); st.add_vertex(l1); st.add_vertex(rr1)
+	var verts: Array = []
+	verts.resize(w * h)
+	for iy in h:
+		for ix in w:
+			var idx := iy * w + ix
+			var y_m := ele[idx] * wgt[idx]  # fades to the y=0 plane at the edge
+			verts[idx] = Vector3(min_x + float(ix) * g, y_m, -(min_y + float(iy) * g))
+	for iy in range(h - 1):
+		for ix in range(w - 1):
+			var v00: Vector3 = verts[iy * w + ix]
+			var v10: Vector3 = verts[iy * w + (ix + 1)]
+			var v01: Vector3 = verts[(iy + 1) * w + ix]
+			var v11: Vector3 = verts[(iy + 1) * w + (ix + 1)]
+			st.add_vertex(v00); st.add_vertex(v01); st.add_vertex(v10)
+			st.add_vertex(v10); st.add_vertex(v01); st.add_vertex(v11)
 	st.generate_normals()
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
@@ -1040,8 +1091,8 @@ func _setup_scenery() -> void:
 		if min_d2 < min_d2_threshold:
 			continue
 		# If a heightmap is loaded, plant the tree on the terrain. Otherwise
-		# fall back to the nearest path waypoint's elevation.
-		var ground_y: float = nearest_ele
+		# match the synthetic ground (nearest path elevation − road-bed drop).
+		var ground_y: float = nearest_ele - 0.35
 		if _terrain_width >= 2:
 			ground_y = _terrain_height_at(x, z)
 		var variety := _pick_tree_variety(rng)
