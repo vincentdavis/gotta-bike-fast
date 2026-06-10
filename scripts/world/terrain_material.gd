@@ -9,14 +9,23 @@ extends RefCounted
 #   - dry/yellowed macro patches so big hillsides aren't one green
 #   - rock blended in by slope (terrain normals), so steep faces on real
 #     GPX mountains read as rock instead of vertical lawn
-# Cheap: one texture fetch ×3, no lighting changes — safe at every quality
-# preset.
+#
+# The five palette colors and a posterize control are uniforms, so build()
+# can swap in the muted olive/ochre/umber Belleville palette (and flatten the
+# shading into painted bands) without a second shader. Cheap: one texture
+# fetch ×3, no lighting changes — safe at every quality preset.
 
 const SHADER_CODE := "
 shader_type spatial;
 render_mode cull_disabled;
 
 uniform sampler2D noise_tex : filter_linear_mipmap, repeat_enable;
+uniform vec3 grass_lo : source_color = vec3(0.13, 0.25, 0.09);
+uniform vec3 grass_hi : source_color = vec3(0.27, 0.42, 0.16);
+uniform vec3 dry_col : source_color = vec3(0.36, 0.35, 0.17);
+uniform vec3 rock_lo : source_color = vec3(0.24, 0.21, 0.18);
+uniform vec3 rock_hi : source_color = vec3(0.38, 0.35, 0.31);
+uniform float posterize = 0.0;  // 0 = smooth; >0 = quantize to N bands
 
 varying vec3 w_pos;
 varying float w_up;
@@ -31,20 +40,18 @@ void fragment() {
 	float n_mid = texture(noise_tex, w_pos.xz * 0.030).r;
 	float n_fine = texture(noise_tex, w_pos.xz * 0.180).r;
 
-	// Grass: light/dark mottling, with large dry patches from the macro
-	// noise. Kept deliberately deep — the game's filmic tonemap + sky
-	// ambient lift everything, so pale source colors read washed-out.
-	vec3 grass = mix(vec3(0.13, 0.25, 0.09), vec3(0.27, 0.42, 0.16),
-		clamp(n_mid * 0.7 + n_fine * 0.3, 0.0, 1.0));
-	grass = mix(grass, vec3(0.36, 0.35, 0.17), smoothstep(0.60, 0.86, n_macro) * 0.45);
+	vec3 grass = mix(grass_lo, grass_hi, clamp(n_mid * 0.7 + n_fine * 0.3, 0.0, 1.0));
+	grass = mix(grass, dry_col, smoothstep(0.60, 0.86, n_macro) * 0.45);
 
-	// Rock for steep faces.
-	vec3 rock = mix(vec3(0.24, 0.21, 0.18), vec3(0.38, 0.35, 0.31), n_fine);
+	vec3 rock = mix(rock_lo, rock_hi, n_fine);
 	float slope = 1.0 - clamp(w_up, 0.0, 1.0);
 	float rockiness = smoothstep(0.28, 0.55, slope + (n_mid - 0.5) * 0.16);
 
 	vec3 col = mix(grass, rock, rockiness);
 	col *= 0.92 + 0.16 * n_fine;  // micro contact-shading breakup
+	if (posterize > 0.5) {
+		col = floor(col * posterize + 0.5) / posterize;
+	}
 	ALBEDO = col;
 	ROUGHNESS = 1.0;
 }
@@ -70,4 +77,14 @@ static func build() -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	mat.set_shader_parameter("noise_tex", tex)
+
+	if Belleville.is_active():
+		# Muted sun-faded meadow: olive grass, mustard dry patches, umber rock.
+		# Quantized into painted bands to match the hand-drawn post-process.
+		mat.set_shader_parameter("grass_lo", Belleville.OLIVE.darkened(0.28))
+		mat.set_shader_parameter("grass_hi", Belleville.OLIVE.lerp(Belleville.BRONZE, 0.45))
+		mat.set_shader_parameter("dry_col", Belleville.BRONZE.lerp(Belleville.OCHRE, 0.4))
+		mat.set_shader_parameter("rock_lo", Belleville.UMBER.darkened(0.1))
+		mat.set_shader_parameter("rock_hi", Belleville.UMBER.lerp(Belleville.SAGE, 0.35))
+		mat.set_shader_parameter("posterize", 6.0)
 	return mat

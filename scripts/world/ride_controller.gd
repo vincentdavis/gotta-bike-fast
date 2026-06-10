@@ -124,6 +124,12 @@ var _ground_inst: MeshInstance3D = null
 # terrain (both surfaces driven by the same elevations).
 var _ground_strip_inst: MeshInstance3D = null
 
+# Belleville theme set-dressing (telegraph poles + distant skyline), parented
+# under one node so it can be rebuilt wholesale when terrain arrives. Held off
+# _clear_existing_scenery's path (those are direct-child MultiMeshInstance3D);
+# this node is freed/rebuilt explicitly in _setup_belleville_dressing.
+var _belleville_dressing: Node3D = null
+
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
 
@@ -136,6 +142,17 @@ func _ready() -> void:
 	_setup_rider()
 	_setup_camera()
 	_setup_hud()
+	# Belleville theme: the full-screen ink/posterize/grain post-process sits
+	# below the HUD and turns the (separately re-coloured) world into an aged
+	# hand-drawn picture. Built last so it composites over everything 3D.
+	# It's a 9-tap full-screen pass at OUTPUT resolution (render_scale doesn't
+	# touch it), so it's skipped at LOW quality — the muted palette + caricature
+	# still read as Belleville without the per-pixel ink cost. HUD theming is
+	# cheap and applies at every preset.
+	if Belleville.is_active():
+		if GraphicsSettings.quality != GraphicsSettings.Quality.LOW:
+			add_child(BellevillePost.new())
+		hud.apply_belleville()
 	# Road, markers, scenery depend on the chosen course — built post-pick
 	# inside _start_solo / _start_game via _build_course_visuals().
 	if GameSession.is_solo:
@@ -251,6 +268,30 @@ func _setup_environment() -> void:
 	env.adjustment_contrast = 1.05
 	env.adjustment_brightness = 1.0
 
+	# Belleville theme: repaint the atmosphere muted + flat, and drop the
+	# shiny/bloomy effects that fight a hand-drawn look. The post-process adds
+	# the ink + grain; here we just set a sun-faded sepia world.
+	if Belleville.is_active():
+		sky_mat.sky_top_color = Belleville.SAGE.darkened(0.05)
+		sky_mat.sky_horizon_color = Belleville.PAPER
+		sky_mat.sky_curve = 0.25
+		sky_mat.ground_bottom_color = Belleville.UMBER
+		sky_mat.ground_horizon_color = Belleville.PAPER_DARK
+		sky_mat.sun_angle_max = 18.0
+		sky_mat.sun_curve = 0.05
+		env.ambient_light_color = Belleville.PAPER
+		env.ambient_light_energy = 0.7
+		env.ssr_enabled = false
+		env.glow_enabled = false
+		env.volumetric_fog_albedo = Belleville.PAPER
+		env.fog_light_color = Belleville.PAPER
+		env.fog_density = 0.0009
+		# Desaturate toward sepia + lift contrast a touch; the duotone grade in
+		# the post-process finishes the job.
+		env.adjustment_saturation = 0.72
+		env.adjustment_contrast = 1.08
+		env.adjustment_brightness = 1.02
+
 	# Everything above is the HIGH look; the user's quality preset strips
 	# the expensive effects (SSR, volumetric fog, SSAO, glow) below HIGH.
 	GraphicsSettings.apply_environment_quality(env)
@@ -280,8 +321,13 @@ func _setup_ground() -> void:
 	noise_tex.height = 512
 	noise_tex.seamless = true
 	var ramp := Gradient.new()
-	ramp.set_color(0, Color(0.22, 0.42, 0.20))
-	ramp.set_color(1, Color(0.44, 0.64, 0.32))
+	if Belleville.is_active():
+		# Muted olive/ochre meadow instead of vivid green.
+		ramp.set_color(0, Belleville.OLIVE.darkened(0.15))
+		ramp.set_color(1, Belleville.BRONZE.lerp(Belleville.OLIVE, 0.5))
+	else:
+		ramp.set_color(0, Color(0.22, 0.42, 0.20))
+		ramp.set_color(1, Color(0.44, 0.64, 0.32))
 	noise_tex.color_ramp = ramp
 
 	var mat := StandardMaterial3D.new()
@@ -311,6 +357,7 @@ func _build_course_visuals() -> void:
 	_setup_road()
 	_setup_markers()
 	_setup_scenery()
+	_setup_belleville_dressing()
 	# Async terrain fetch — populates _terrain_heights + adds the mesh
 	# beside the strip when it arrives. Re-places scenery onto the
 	# heightmap once it does.
@@ -413,6 +460,9 @@ func _setup_terrain_async() -> void:
 	# end up with two overlapping forests.
 	_clear_existing_scenery()
 	_setup_scenery()
+	# Rebuild the Belleville dressing too so its poles sit on the real terrain
+	# height instead of the path-elevation fallback used at first build.
+	_setup_belleville_dressing()
 
 
 func _setup_minimap_async() -> void:
@@ -1039,6 +1089,9 @@ func _setup_scenery() -> void:
 	# draw calls; instance colors give per-tree foliage hue variation.
 	# Density scales with the quality preset.
 	var tree_count: int = GraphicsSettings.tree_count()
+	# Resolve the theme once — the value is constant for the whole world build,
+	# so threading it avoids an autoload lookup per scattered tree.
+	var bel := Belleville.is_active()
 	const PADDING := 80.0
 	const MIN_DIST_TO_ROAD := 6.0
 	if _course_path.size() < 2:
@@ -1095,12 +1148,12 @@ func _setup_scenery() -> void:
 		var ground_y: float = nearest_ele - 0.35
 		if _terrain_width >= 2:
 			ground_y = _terrain_height_at(x, z)
-		var variety := _pick_tree_variety(rng)
+		var variety := _pick_tree_variety(rng, bel)
 		placements[variety].append({
 			"pos": Vector3(x, ground_y, z),
 			"scale": _tree_scale(rng, variety),
 			"yaw": rng.randf_range(0.0, TAU),
-			"color": _tree_foliage_color(rng, variety),
+			"color": _tree_foliage_color(rng, variety, bel),
 		})
 		placed += 1
 
@@ -1125,8 +1178,17 @@ func _setup_scenery() -> void:
 		add_child(inst)
 
 
-func _pick_tree_variety(rng: RandomNumberGenerator) -> int:
+func _pick_tree_variety(rng: RandomNumberGenerator, bel: bool) -> int:
 	var roll := rng.randf()
+	if bel:
+		# Lean on poplars — the tall roadside rows of the French countryside.
+		if roll < 0.50:
+			return SceneryFactory.Variety.POPLAR
+		if roll < 0.74:
+			return SceneryFactory.Variety.OAK
+		if roll < 0.88:
+			return SceneryFactory.Variety.PINE
+		return SceneryFactory.Variety.BUSH
 	if roll < 0.32:
 		return SceneryFactory.Variety.PINE
 	if roll < 0.62:
@@ -1144,7 +1206,19 @@ func _tree_scale(rng: RandomNumberGenerator, variety: int) -> float:
 		_: return rng.randf_range(0.7, 1.1)
 
 
-func _tree_foliage_color(rng: RandomNumberGenerator, variety: int) -> Color:
+func _tree_foliage_color(rng: RandomNumberGenerator, variety: int, bel: bool) -> Color:
+	if bel:
+		# Dusty olive/sage/bronze foliage, slightly varied per tree, so the
+		# forest sits in the muted palette instead of vivid green.
+		var base: Color
+		match variety:
+			SceneryFactory.Variety.PINE:
+				base = Belleville.TEAL.lerp(Belleville.OLIVE, 0.5)
+			SceneryFactory.Variety.POPLAR:
+				base = Belleville.OLIVE.lerp(Belleville.BRONZE, 0.35)
+			_:
+				base = Belleville.OLIVE
+		return base.lerp(Belleville.SAGE, rng.randf_range(0.0, 0.3)).darkened(rng.randf_range(0.0, 0.12))
 	match variety:
 		SceneryFactory.Variety.PINE:
 			# Darker blue-greens.
@@ -1157,6 +1231,120 @@ func _tree_foliage_color(rng: RandomNumberGenerator, variety: int) -> Color:
 			return Color(rng.randf_range(0.13, 0.22), rng.randf_range(0.38, 0.52), rng.randf_range(0.14, 0.22))
 
 
+func _setup_belleville_dressing() -> void:
+	# Period set-dressing for the Belleville theme: telegraph poles marching
+	# along the right shoulder, and a clump of tall leaning towers hazed into
+	# the horizon. Rebuilt wholesale (free + recreate) so terrain arrival can
+	# reseat the poles on the real ground height.
+	if _belleville_dressing != null:
+		_belleville_dressing.queue_free()
+		_belleville_dressing = null
+	if not Belleville.is_active() or _course_path.size() < 2:
+		return
+
+	var root := Node3D.new()
+	root.name = "BellevilleDressing"
+	add_child(root)
+	_belleville_dressing = root
+
+	const POLE_SPACING_M := 50.0
+	const POLE_SIDE_OFFSET_M := 9.0
+	const MAX_POLES := 200
+	var total: float = float(_course_path[_course_path.size() - 1]["distance_m"])
+	# Stretch the spacing on long courses so ~MAX_POLES poles span the WHOLE
+	# route rather than truncating after the first 10 km. On short courses the
+	# first pole is pulled in to half-length so even a sub-50 m loop gets one.
+	var spacing := maxf(POLE_SPACING_M, total / float(MAX_POLES))
+	var xforms: Array = []
+	var d := minf(spacing, total * 0.5)
+	while d < total:
+		var center := _position_at_distance(d)
+		var tng := _tangent_at_distance(d)
+		var right := Vector3(-tng.z, 0.0, tng.x)
+		var pos := center + right * POLE_SIDE_OFFSET_M
+		# Base sits on the ground: real terrain height if loaded, else the
+		# road-bed elevation (matches the tree fallback).
+		pos.y = _terrain_height_at(pos.x, pos.z) if _terrain_width >= 2 else center.y - 0.35
+		var yaw := atan2(tng.x, tng.z)
+		xforms.append(Transform3D(Basis(Vector3.UP, yaw), pos))
+		d += spacing
+
+	if not xforms.is_empty():
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = _build_pole_mesh()
+		mm.instance_count = xforms.size()
+		for i in xforms.size():
+			mm.set_instance_transform(i, xforms[i])
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		root.add_child(inst)
+
+	_add_belleville_skyline(root, total)
+
+
+func _build_pole_mesh() -> ArrayMesh:
+	# A wooden telegraph pole with two crossarms, base at y = 0.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var pole := BoxMesh.new()
+	pole.size = Vector3(0.16, 6.0, 0.16)
+	st.append_from(pole, 0, Transform3D(Basis(), Vector3(0, 3.0, 0)))
+	var arm1 := BoxMesh.new()
+	arm1.size = Vector3(1.5, 0.12, 0.12)
+	st.append_from(arm1, 0, Transform3D(Basis(), Vector3(0, 5.5, 0)))
+	var arm2 := BoxMesh.new()
+	arm2.size = Vector3(1.1, 0.12, 0.12)
+	st.append_from(arm2, 0, Transform3D(Basis(), Vector3(0, 5.0, 0)))
+	var mesh := ArrayMesh.new()
+	st.commit(mesh)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Belleville.UMBER.darkened(0.1)
+	m.roughness = 1.0
+	mesh.surface_set_material(0, m)
+	return mesh
+
+
+func _add_belleville_skyline(root: Node3D, total: float) -> void:
+	# A distant clump of tall, slightly-leaning Art-Deco towers — a silhouette
+	# backdrop hazed into the fog, evoking the film's looming Belleville city.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x5EA51DE
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Belleville.TEAL.darkened(0.12)
+	mat.roughness = 1.0
+
+	var mid := _position_at_distance(total * 0.5)
+	var dir := Vector3(0.62, 0.0, -0.78).normalized()  # off toward the light
+	var clump := mid + dir * 450.0
+
+	# One MultiMesh (one draw call) of a unit cube, scaled/leaned per instance —
+	# matches the pole path and keeps the backdrop to a single batch.
+	var unit := BoxMesh.new()
+	unit.size = Vector3.ONE
+	unit.material = mat
+	const TOWERS := 12
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = unit
+	mm.instance_count = TOWERS
+	for i in TOWERS:
+		var off := Vector3(rng.randf_range(-130.0, 130.0), 0.0, rng.randf_range(-130.0, 130.0))
+		var h := rng.randf_range(45.0, 115.0)
+		var wdt := rng.randf_range(12.0, 26.0)
+		var base := clump + off
+		var lean := Basis.from_euler(Vector3(
+			deg_to_rad(rng.randf_range(-4.0, 4.0)),
+			deg_to_rad(rng.randf_range(0.0, 360.0)),
+			deg_to_rad(rng.randf_range(-4.0, 4.0)),
+		)).scaled(Vector3(wdt, h, wdt))
+		# Base a touch underground so towers rise straight out of the horizon.
+		mm.set_instance_transform(i, Transform3D(lean, Vector3(base.x, h * 0.5 - 6.0, base.z)))
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = mm
+	root.add_child(inst)
+
+
 func _setup_sun() -> void:
 	# Mid-morning sun: high enough to throw long-but-not-flat shadows along
 	# the road, off-axis enough that climbing turns face into and away from
@@ -1165,6 +1353,14 @@ func _setup_sun() -> void:
 	sun.rotation_degrees = Vector3(-55, -35, 0)
 	sun.light_energy = 1.4
 	sun.light_color = Color(1.0, 0.97, 0.92)  # warm sunlight, faint amber cast
+
+	# Belleville: a low hazy sun — warmer, softer, a little dimmer, so the
+	# scene reads flat and illustrated rather than crisply lit.
+	if Belleville.is_active():
+		sun.light_energy = 1.1
+		sun.light_color = Belleville.OCHRE.lerp(Color.WHITE, 0.4)
+		sun.shadow_blur = 2.0
+		sun.shadow_opacity = 0.7
 
 	# Parallel split shadow maps — four cascades give crisp shadows under
 	# the rider while still covering scenery out to ~200 m without the

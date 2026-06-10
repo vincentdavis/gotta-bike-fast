@@ -8,6 +8,7 @@ extends Control
 @onready var rider_summary: Label = $Margin/Scroll/VBox/RiderSummary
 @onready var manage_riders_button: Button = $Margin/Scroll/VBox/ManageRidersButton
 @onready var units_option: OptionButton = $Margin/Scroll/VBox/UnitsOption
+@onready var theme_option: OptionButton = $Margin/Scroll/VBox/ThemeOption
 @onready var quality_option: OptionButton = $Margin/Scroll/VBox/QualityOption
 @onready var scale_label: Label = $Margin/Scroll/VBox/ScaleLabel
 @onready var scale_slider: HSlider = $Margin/Scroll/VBox/ScaleSlider
@@ -39,7 +40,15 @@ func _ready() -> void:
 # --- Graphics (device-local; applied + saved immediately, no Save needed) ---
 
 func _setup_graphics_controls() -> void:
-	# Item index == enum value for both option buttons.
+	# Item index == enum value for the option buttons.
+	theme_option.add_item("Belleville (vintage)", GraphicsSettings.VisualTheme.BELLEVILLE)
+	theme_option.add_item("Classic (realistic)", GraphicsSettings.VisualTheme.CLASSIC)
+	# add_item id == enum value; select by id so order is irrelevant.
+	theme_option.select(theme_option.get_item_index(GraphicsSettings.theme))
+	theme_option.item_selected.connect(
+		func(idx: int) -> void: GraphicsSettings.set_theme(theme_option.get_item_id(idx))
+	)
+
 	quality_option.add_item("Low", GraphicsSettings.Quality.LOW)
 	quality_option.add_item("Medium", GraphicsSettings.Quality.MEDIUM)
 	quality_option.add_item("High", GraphicsSettings.Quality.HIGH)

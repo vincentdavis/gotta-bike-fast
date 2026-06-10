@@ -42,6 +42,12 @@ var _wheel_phase := 0.0
 
 
 func _init(albedo: Color) -> void:
+	# Belleville theme: caricature the racer — Champion-style tree-trunk calves
+	# and thighs on a shrunken torso — and repaint everything in the muted
+	# palette with flat, matte materials so the ink/posterize post-process can
+	# do the line work.
+	var bel := Belleville.is_active()
+
 	var jersey := StandardMaterial3D.new()
 	jersey.albedo_color = albedo
 	var bibs := StandardMaterial3D.new()
@@ -61,6 +67,19 @@ func _init(albedo: Color) -> void:
 	metal.metallic = 0.6
 	metal.roughness = 0.35
 
+	if bel:
+		jersey.albedo_color = albedo.lerp(Belleville.OCHRE, 0.30)
+		jersey.roughness = 1.0
+		bibs.albedo_color = Belleville.INK
+		skin.albedo_color = Color(0.85, 0.72, 0.56)
+		helmet_mat.albedo_color = Belleville.OCHRE
+		helmet_mat.roughness = 1.0
+		rubber.albedo_color = Belleville.INK
+		accent.albedo_color = Belleville.TERRACOTTA
+		metal.albedo_color = Belleville.BRONZE
+		metal.metallic = 0.0  # kill the chrome specular — flat, illustrated
+		metal.roughness = 1.0
+
 	const LEAN_DEG := -28.0
 
 	# --- upper body: pivots at the saddle so effort sway rocks the torso ---
@@ -69,7 +88,7 @@ func _init(albedo: Color) -> void:
 	add_child(_upper)
 
 	var torso := _part(CapsuleMesh.new(), jersey, Vector3(0, 0.10, -0.10))
-	(torso.mesh as CapsuleMesh).radius = 0.18
+	(torso.mesh as CapsuleMesh).radius = 0.14 if bel else 0.18  # shrunken torso
 	(torso.mesh as CapsuleMesh).height = 0.80
 	torso.rotation_degrees = Vector3(LEAN_DEG, 0, 0)
 	_upper.add_child(torso)
@@ -142,10 +161,10 @@ func _init(albedo: Color) -> void:
 	add_child(_pedal_r)
 
 	var thigh_mesh := CapsuleMesh.new()
-	thigh_mesh.radius = 0.075
+	thigh_mesh.radius = 0.13 if bel else 0.075  # caricature: massive thighs
 	thigh_mesh.height = 1.0  # unit length, stretched per frame
 	var shin_mesh := CapsuleMesh.new()
-	shin_mesh.radius = 0.06
+	shin_mesh.radius = 0.115 if bel else 0.06  # caricature: tree-trunk calves
 	shin_mesh.height = 1.0
 	_thigh_l = _part(thigh_mesh, bibs, Vector3.ZERO)
 	_thigh_r = _part(thigh_mesh, bibs, Vector3.ZERO)

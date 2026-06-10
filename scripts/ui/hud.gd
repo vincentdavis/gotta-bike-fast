@@ -27,6 +27,10 @@ extends CanvasLayer
 const CAMERA_TOAST_S := 1.6
 const CAMERA_TOAST_FADE_S := 0.5
 var _camera_toast_t := 0.0
+# Base color of the stat text. White normally; apply_belleville() switches it
+# to aged cream. set_draft() restores this (not the engine default) when the
+# rider isn't drafting, so the draft row stays themed like its siblings.
+var _stat_base_color := Color(1, 1, 1)
 
 
 func _process(delta: float) -> void:
@@ -44,6 +48,31 @@ func show_camera(view_name: String) -> void:
 	camera_label.text = "📷  %s" % view_name
 	camera_label.modulate.a = 1.0
 	_camera_toast_t = CAMERA_TOAST_S
+
+
+func apply_belleville() -> void:
+	# Vintage HUD pass for the Belleville theme: aged-cream stat text with a
+	# heavy ink outline so it reads as hand-lettered over the (now sepia)
+	# world, and terracotta/ink accents on the big call-outs.
+	var cream := Color("e3d8bc")
+	var ink := Color("2e2a24")
+	_stat_base_color = cream  # so set_draft restores cream, not engine-white
+	var stat_nodes: Array = [
+		power_label, cadence_label, speed_label, heart_rate_label, trainer_label,
+		distance_label, lap_label, grade_label, time_label, draft_label,
+		course_label, status_label, get_node_or_null("VBox/HintLabel"),
+	]
+	for n in stat_nodes:
+		if n != null:
+			n.add_theme_color_override("font_color", cream)
+			n.add_theme_color_override("font_outline_color", ink)
+			n.add_theme_constant_override("outline_size", 4)
+	countdown_label.add_theme_color_override("font_color", Color("a85a3c"))  # terracotta
+	countdown_label.add_theme_color_override("font_outline_color", ink)
+	countdown_label.add_theme_constant_override("outline_size", 6)
+	camera_label.add_theme_color_override("font_color", cream)
+	camera_label.add_theme_color_override("font_outline_color", ink)
+	camera_label.add_theme_constant_override("outline_size", 4)
 
 
 func set_power(w: float, from_sensor: bool = false) -> void:
@@ -113,7 +142,10 @@ func set_draft(savings_pct: int) -> void:
 	if savings_pct > 0:
 		draft_label.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0))
 	else:
-		draft_label.remove_theme_color_override("font_color")
+		# Restore the themed base (cream under Belleville, white otherwise) —
+		# not remove_theme_color_override, which would drop to engine-white and
+		# desync this row from the other cream stats.
+		draft_label.add_theme_color_override("font_color", _stat_base_color)
 
 
 func set_course(name: String, length_m: float) -> void:

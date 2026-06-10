@@ -20,11 +20,19 @@ extends Node
 #   fullscreen    fullscreen vs windowed.
 #   show_fps      small always-on-top fps readout to sanity-check settings.
 #
-# Defaults match the game's behaviour before this autoload existed (HIGH,
-# native scale, vsync, windowed) so existing installs see no change.
+# Performance defaults match the game's behaviour before this autoload existed
+# (HIGH, native scale, vsync, windowed) so existing installs see no perf
+# change. The one deliberate exception is `theme`, which defaults to BELLEVILLE
+# — the headline look — so every install (new or upgraded) starts in the
+# vintage theme until the player switches to Classic in Settings.
 
 enum Quality { LOW, MEDIUM, HIGH }
 enum FrameLimit { VSYNC, FPS_60, FPS_30, UNCAPPED }
+# Visual theme. CLASSIC is the original realistic look; BELLEVILLE is the
+# vintage hand-drawn "Triplets of Belleville" treatment (muted sepia/olive
+# palette + a full-screen ink/posterize/grain post-process). Applies on the
+# next ride, like the quality preset.
+enum VisualTheme { CLASSIC, BELLEVILLE }  # "Theme" alone shadows Godot's Theme class
 
 const FILE := "user://graphics.cfg"
 
@@ -33,6 +41,9 @@ var render_scale: float = 1.0
 var frame_limit: int = FrameLimit.VSYNC
 var fullscreen: bool = false
 var show_fps: bool = false
+# Defaults to BELLEVILLE — it's the headline look now. Players who prefer the
+# original realistic render switch to CLASSIC in Settings.
+var theme: int = VisualTheme.BELLEVILLE
 
 var _fps_layer: CanvasLayer = null
 var _fps_label: Label = null
@@ -74,6 +85,19 @@ func set_show_fps(value: bool) -> void:
 	show_fps = value
 	_apply_fps_overlay()
 	_save()
+
+
+func set_theme(value: int) -> void:
+	theme = clampi(value, VisualTheme.CLASSIC, VisualTheme.BELLEVILLE)
+	_save()
+	# Takes effect when the next ride builds its world (sky, palette, and the
+	# post-process are all assembled at ride start).
+
+
+func theme_name() -> String:
+	match theme:
+		VisualTheme.CLASSIC: return "Classic"
+		_: return "Belleville"
 
 
 # --- ride-quality hooks ---
@@ -224,6 +248,7 @@ func _load() -> void:
 	frame_limit = clampi(int(cfg.get_value("graphics", "frame_limit", FrameLimit.VSYNC)), FrameLimit.VSYNC, FrameLimit.UNCAPPED)
 	fullscreen = bool(cfg.get_value("graphics", "fullscreen", false))
 	show_fps = bool(cfg.get_value("graphics", "show_fps", false))
+	theme = clampi(int(cfg.get_value("graphics", "theme", VisualTheme.BELLEVILLE)), VisualTheme.CLASSIC, VisualTheme.BELLEVILLE)
 
 
 func _save() -> void:
@@ -233,4 +258,5 @@ func _save() -> void:
 	cfg.set_value("graphics", "frame_limit", frame_limit)
 	cfg.set_value("graphics", "fullscreen", fullscreen)
 	cfg.set_value("graphics", "show_fps", show_fps)
+	cfg.set_value("graphics", "theme", theme)
 	cfg.save(FILE)

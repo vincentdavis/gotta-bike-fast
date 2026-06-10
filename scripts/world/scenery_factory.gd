@@ -15,6 +15,7 @@ enum Variety { PINE, OAK, POPLAR, BUSH }
 
 static var _trunk_mat: StandardMaterial3D
 static var _foliage_mat: StandardMaterial3D
+static var _mat_belleville := false  # which theme the cached materials are for
 
 
 static func variety_mesh(variety: int) -> ArrayMesh:
@@ -105,15 +106,19 @@ static func _build(trunk_parts: Array, foliage_parts: Array) -> ArrayMesh:
 
 
 static func _ensure_materials() -> void:
-	if _trunk_mat != null:
+	# Rebuild when the theme changes so a mid-session theme switch repaints the
+	# trunks (the Belleville look uses umber bark + matte foliage).
+	var bel := Belleville.is_active()
+	if _trunk_mat != null and _mat_belleville == bel:
 		return
+	_mat_belleville = bel
 	_trunk_mat = StandardMaterial3D.new()
-	_trunk_mat.albedo_color = Color(0.36, 0.27, 0.18)
+	_trunk_mat.albedo_color = Belleville.UMBER if bel else Color(0.36, 0.27, 0.18)
 	_trunk_mat.roughness = 1.0
 	_foliage_mat = StandardMaterial3D.new()
 	_foliage_mat.albedo_color = Color.WHITE
 	_foliage_mat.vertex_color_use_as_albedo = true  # tinted per-instance
-	_foliage_mat.roughness = 0.95
+	_foliage_mat.roughness = 1.0 if bel else 0.95
 
 
 static func _cone(radius: float, height: float) -> CylinderMesh:
