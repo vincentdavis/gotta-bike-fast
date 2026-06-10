@@ -8,6 +8,12 @@ extends Control
 @onready var rider_summary: Label = $Margin/Scroll/VBox/RiderSummary
 @onready var manage_riders_button: Button = $Margin/Scroll/VBox/ManageRidersButton
 @onready var units_option: OptionButton = $Margin/Scroll/VBox/UnitsOption
+@onready var quality_option: OptionButton = $Margin/Scroll/VBox/QualityOption
+@onready var scale_label: Label = $Margin/Scroll/VBox/ScaleLabel
+@onready var scale_slider: HSlider = $Margin/Scroll/VBox/ScaleSlider
+@onready var frame_option: OptionButton = $Margin/Scroll/VBox/FrameOption
+@onready var fullscreen_check: CheckBox = $Margin/Scroll/VBox/FullscreenCheck
+@onready var show_fps_check: CheckBox = $Margin/Scroll/VBox/ShowFPSCheck
 @onready var music_input: HSlider = $Margin/Scroll/VBox/MusicInput
 @onready var sfx_input: HSlider = $Margin/Scroll/VBox/SFXInput
 @onready var status_label: Label = $Margin/Scroll/VBox/StatusLabel
@@ -25,8 +31,54 @@ func _ready() -> void:
 	save_button.pressed.connect(_on_save)
 	back_button.pressed.connect(_on_back)
 
+	_setup_graphics_controls()
 	_render_rider_summary()
 	_load_user()
+
+
+# --- Graphics (device-local; applied + saved immediately, no Save needed) ---
+
+func _setup_graphics_controls() -> void:
+	# Item index == enum value for both option buttons.
+	quality_option.add_item("Low", GraphicsSettings.Quality.LOW)
+	quality_option.add_item("Medium", GraphicsSettings.Quality.MEDIUM)
+	quality_option.add_item("High", GraphicsSettings.Quality.HIGH)
+	quality_option.select(GraphicsSettings.quality)
+	quality_option.item_selected.connect(
+		func(idx: int) -> void: GraphicsSettings.set_quality(idx)
+	)
+
+	scale_slider.value = GraphicsSettings.render_scale
+	_update_scale_label(GraphicsSettings.render_scale)
+	scale_slider.value_changed.connect(_on_scale_changed)
+
+	frame_option.add_item("VSync (match display)", GraphicsSettings.FrameLimit.VSYNC)
+	frame_option.add_item("60 fps", GraphicsSettings.FrameLimit.FPS_60)
+	frame_option.add_item("30 fps (quiet)", GraphicsSettings.FrameLimit.FPS_30)
+	frame_option.add_item("Uncapped", GraphicsSettings.FrameLimit.UNCAPPED)
+	frame_option.select(GraphicsSettings.frame_limit)
+	frame_option.item_selected.connect(
+		func(idx: int) -> void: GraphicsSettings.set_frame_limit(idx)
+	)
+
+	fullscreen_check.button_pressed = GraphicsSettings.fullscreen
+	fullscreen_check.toggled.connect(
+		func(on: bool) -> void: GraphicsSettings.set_fullscreen(on)
+	)
+
+	show_fps_check.button_pressed = GraphicsSettings.show_fps
+	show_fps_check.toggled.connect(
+		func(on: bool) -> void: GraphicsSettings.set_show_fps(on)
+	)
+
+
+func _on_scale_changed(value: float) -> void:
+	GraphicsSettings.set_render_scale(value)
+	_update_scale_label(value)
+
+
+func _update_scale_label(value: float) -> void:
+	scale_label.text = "Render scale: %d%%" % int(round(value * 100.0))
 
 
 func _render_rider_summary() -> void:

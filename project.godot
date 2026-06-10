@@ -19,6 +19,7 @@ config/macos_native_icon="res://branding/icon.icns"
 
 [autoload]
 
+GraphicsSettings="*res://scripts/graphics_settings.gd"
 DevSettings="*res://scripts/network/dev_settings.gd"
 ApiClient="*res://scripts/network/api_client.gd"
 WorldClient="*res://scripts/network/world_client.gd"

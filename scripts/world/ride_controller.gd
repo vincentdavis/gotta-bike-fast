@@ -246,6 +246,10 @@ func _setup_environment() -> void:
 	env.adjustment_contrast = 1.05
 	env.adjustment_brightness = 1.0
 
+	# Everything above is the HIGH look; the user's quality preset strips
+	# the expensive effects (SSR, volumetric fog, SSAO, glow) below HIGH.
+	GraphicsSettings.apply_environment_quality(env)
+
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -1026,6 +1030,9 @@ func _setup_sun() -> void:
 	# in ambient. Without this the sky disc would be static and ambient
 	# wouldn't pick up the warm cast.
 	sun.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_AND_SKY
+
+	# Below HIGH the quality preset cuts shadow cascades + range.
+	GraphicsSettings.apply_sun_quality(sun)
 
 	add_child(sun)
 
