@@ -19,6 +19,31 @@ extends CanvasLayer
 @onready var minimap_box: Control = $MinimapPanel/Margin/VBox/MapBox
 @onready var minimap_rect: TextureRect = $MinimapPanel/Margin/VBox/MapBox/MinimapRect
 @onready var minimap_marker: ColorRect = $MinimapPanel/Margin/VBox/MapBox/RiderMarker
+@onready var camera_label: Label = $CameraToast
+
+# Camera-view toast: shows the active view name for a moment after a switch,
+# then fades out. _camera_toast_t counts down; the last CAMERA_TOAST_FADE_S
+# seconds fade the alpha to zero.
+const CAMERA_TOAST_S := 1.6
+const CAMERA_TOAST_FADE_S := 0.5
+var _camera_toast_t := 0.0
+
+
+func _process(delta: float) -> void:
+	if _camera_toast_t > 0.0:
+		_camera_toast_t -= delta
+		if _camera_toast_t <= 0.0:
+			camera_label.modulate.a = 0.0
+		elif _camera_toast_t < CAMERA_TOAST_FADE_S:
+			camera_label.modulate.a = _camera_toast_t / CAMERA_TOAST_FADE_S
+
+
+func show_camera(view_name: String) -> void:
+	if view_name.is_empty():
+		return
+	camera_label.text = "📷  %s" % view_name
+	camera_label.modulate.a = 1.0
+	_camera_toast_t = CAMERA_TOAST_S
 
 
 func set_power(w: float, from_sensor: bool = false) -> void:

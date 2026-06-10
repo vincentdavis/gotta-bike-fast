@@ -35,7 +35,7 @@ var _ground_shader_material: ShaderMaterial = null
 # with the road grade so the bike rolls along the tilted surface, but the
 # camera (a sibling on rider_node) stays at a fixed look angle.
 var rider_visual_node: Node3D
-var camera: Camera3D
+var camera_rig: CameraRig
 var hud: CanvasLayer
 
 var kit: PhysicsKit = PhysicsKit.new()
@@ -1208,15 +1208,24 @@ func _setup_rider() -> void:
 
 
 func _setup_camera() -> void:
-	camera = Camera3D.new()
-	camera.position = Vector3(0.0, 2.0, 5.0)
-	camera.rotation_degrees = Vector3(-12.0, 0.0, 0.0)
-	rider_node.add_child(camera)
+	# Multi-view rig parented to the rider node, so every preset is defined in
+	# the rider's local frame and follows position + heading. Switch with C/V
+	# (cycle) or number keys 1–9 (direct), handled in _input. Seed the view the
+	# player last used this session (set_initial_view before add_child so the
+	# rig's _ready snaps to it without an ease-in from Chase).
+	camera_rig = CameraRig.new()
+	camera_rig.set_initial_view(GameSession.camera_view_index)
+	rider_node.add_child(camera_rig)
 
 
 func _setup_hud() -> void:
 	hud = HUD_SCENE.instantiate()
 	add_child(hud)
+	# Announce the starting view so the camera feature advertises itself (and
+	# confirms a restored preference) instead of staying silent until the
+	# player happens to press a camera key.
+	if camera_rig != null:
+		hud.show_camera(camera_rig.current_name())
 
 
 # --- Session startup ---
@@ -1414,6 +1423,11 @@ func _notification(what: int) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Camera switching works whenever the rig exists — including the pre-race
+	# pen — so a player can frame their shot before the gun.
+	if event is InputEventKey and event.pressed and not event.echo:
+		if _handle_camera_key(event):
+			return
 	if not is_riding:
 		return
 	if event is InputEventKey and event.pressed:
@@ -1428,8 +1442,53 @@ func _input(event: InputEvent) -> void:
 			heading = -heading
 
 
+func _handle_camera_key(event: InputEventKey) -> bool:
+	# C cycles forward, V cycles back, number keys jump straight to a view.
+	# Both the top row (KEY_1..KEY_9) and the numpad (KEY_KP_1..KEY_KP_9) work
+	# — the numpad sits in a separate keycode region, so it needs its own
+	# range. Returns true if the key was a camera key (so _input stops here).
+	if camera_rig == null:
+		return false
+	var kc := event.keycode
+	if kc == KEY_C:
+		_apply_camera_change(camera_rig.cycle_next())
+		return true
+	if kc == KEY_V:
+		_apply_camera_change(camera_rig.cycle_prev())
+		return true
+	var idx := -1
+	if kc >= KEY_1 and kc <= KEY_9:
+		idx = kc - KEY_1
+	elif kc >= KEY_KP_1 and kc <= KEY_KP_9:
+		idx = kc - KEY_KP_1
+	if idx >= 0:
+		if idx < camera_rig.view_count():
+			_apply_camera_change(camera_rig.select(idx))
+		return true
+	return false
+
+
+func _apply_camera_change(view_name: String) -> void:
+	if view_name.is_empty():
+		return
+	# Remember the choice for the rest of the session so the next ride starts
+	# on the same view. The rider visual is hidden/shown per-frame in _process
+	# from the camera's live position (not here), so the body never flashes
+	# mid-transition out of First Person.
+	GameSession.camera_view_index = camera_rig.current_index()
+	if hud != null:
+		hud.show_camera(view_name)
+
+
 func _process(delta: float) -> void:
 	_update_ghost_visuals(delta)
+	# Hide the player's own rider (and its bib, which rides on the same node)
+	# whenever the camera eye is inside the body — that's First Person and the
+	# slice of any transition that sweeps through it. Driven from the rig's
+	# live eased position, so the body never flashes during an exit sweep. Runs
+	# even before the gun so framing in the pen is correct too.
+	if camera_rig != null and rider_visual_node != null:
+		rider_visual_node.visible = not camera_rig.eye_inside_rider()
 	if not is_riding:
 		return
 	_update_power_input(delta)

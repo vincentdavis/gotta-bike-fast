@@ -39,6 +39,12 @@ var is_solo: bool = false
 # Defaults to the landing page — safest fallback if nothing set it.
 var dev_menu_return_scene: String = "res://scenes/main.tscn"
 
+# Last camera view the player selected in a ride (index into CameraRig's
+# preset list). Persists across rides within a session so a player who
+# prefers, say, First Person doesn't have to re-pick it every ride. Resets
+# to 0 (Chase) only on app restart.
+var camera_view_index: int = 0
+
 
 static func parse_iso_to_unix(iso: String) -> float:
 	if iso.is_empty():
