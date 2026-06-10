@@ -376,6 +376,12 @@ func _setup_terrain_async() -> void:
 			var c := img.get_pixel(x, y)
 			_terrain_heights[y * w + x] = _terrain_min_ele + c.r * range_m
 
+	# Pin a corridor of terrain under the road BEFORE meshing — the DEM and
+	# the GPX's own elevations disagree by metres in places, which used to
+	# bury stretches of road inside hillsides. Tree placement also samples
+	# the carved heights, so trees won't float over the corridor.
+	_carve_road_corridor()
+
 	if not is_inside_tree():
 		return
 	_build_terrain_mesh()
@@ -443,6 +449,51 @@ func _clear_existing_scenery() -> void:
 			child.queue_free()
 
 
+func _carve_road_corridor() -> void:
+	# Blend the heightmap toward (path elevation − DROP_M) within OUTER_M of
+	# the course centerline, fully pinned inside INNER_M. Where multiple path
+	# points influence a cell, the strongest (nearest) wins. This guarantees
+	# the road sits proud of the terrain everywhere along the route while the
+	# corridor's edges fade smoothly back into the real DEM.
+	const INNER_M := 6.0
+	const OUTER_M := 28.0
+	const DROP_M := 0.35
+	if _terrain_width < 2 or _terrain_grid_m <= 0.0 or _course_path.size() < 2:
+		return
+	var g := _terrain_grid_m
+	var w := _terrain_width
+	var h := _terrain_height
+	var carve_w := PackedFloat32Array()
+	carve_w.resize(w * h)  # zero-filled
+	var carve_ele := PackedFloat32Array()
+	carve_ele.resize(w * h)
+	var reach := int(ceil(OUTER_M / g)) + 1
+	for p in _course_path:
+		# Path x/y are in the same local frame as the heightmap origin.
+		var cx := (float(p["x_m"]) - _terrain_origin_x_m) / g
+		var cy := (float(p["y_m"]) - _terrain_origin_y_m) / g
+		var target := float(p["elevation_m"]) - DROP_M
+		var ix0 := maxi(int(floor(cx)) - reach, 0)
+		var ix1 := mini(int(floor(cx)) + reach, w - 1)
+		var iy0 := maxi(int(floor(cy)) - reach, 0)
+		var iy1 := mini(int(floor(cy)) + reach, h - 1)
+		for iy in range(iy0, iy1 + 1):
+			for ix in range(ix0, ix1 + 1):
+				var dx := (float(ix) - cx) * g
+				var dy := (float(iy) - cy) * g
+				var dist := sqrt(dx * dx + dy * dy)
+				if dist >= OUTER_M:
+					continue
+				var wgt := 1.0 - smoothstep(INNER_M, OUTER_M, dist)
+				var idx := iy * w + ix
+				if wgt > carve_w[idx]:
+					carve_w[idx] = wgt
+					carve_ele[idx] = target
+	for i in w * h:
+		if carve_w[i] > 0.0:
+			_terrain_heights[i] = lerpf(float(_terrain_heights[i]), carve_ele[i], carve_w[i])
+
+
 func _build_terrain_mesh() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -460,15 +511,19 @@ func _build_terrain_mesh() -> void:
 			var wy: float = oy + float(y) * g
 			var ele: float = _terrain_heights[y * w + x]
 			verts[y * w + x] = Vector3(wx, ele, -wy)
-	# Emit one quad per cell as two triangles. CCW from above for +Y normals.
+	# Emit one quad per cell as two triangles. Godot front faces wind
+	# CLOCKWISE seen from the camera, so for an up-facing surface the order
+	# below makes generate_normals() produce +Y normals (the old order gave
+	# downward normals — the shader's slope test then read every face as a
+	# cliff and painted the whole terrain rock).
 	for y in range(h - 1):
 		for x in range(w - 1):
 			var v00: Vector3 = verts[y * w + x]
 			var v10: Vector3 = verts[y * w + (x + 1)]
 			var v01: Vector3 = verts[(y + 1) * w + x]
 			var v11: Vector3 = verts[(y + 1) * w + (x + 1)]
-			st.add_vertex(v00); st.add_vertex(v10); st.add_vertex(v01)
-			st.add_vertex(v10); st.add_vertex(v11); st.add_vertex(v01)
+			st.add_vertex(v00); st.add_vertex(v01); st.add_vertex(v10)
+			st.add_vertex(v10); st.add_vertex(v01); st.add_vertex(v11)
 	st.generate_normals()
 
 	var inst := MeshInstance3D.new()
@@ -559,9 +614,9 @@ func _setup_ground_strip() -> void:
 		var rr0 := c0 + r0 * STRIP_HALF_WIDTH
 		var l1 := c1 - r1 * STRIP_HALF_WIDTH
 		var rr1 := c1 + r1 * STRIP_HALF_WIDTH
-		# CCW from above so the surface normal points +Y (up).
-		st.add_vertex(l0); st.add_vertex(rr0); st.add_vertex(l1)
-		st.add_vertex(rr0); st.add_vertex(rr1); st.add_vertex(l1)
+		# Godot fronts are clockwise-from-camera; this order yields +Y normals.
+		st.add_vertex(l0); st.add_vertex(l1); st.add_vertex(rr0)
+		st.add_vertex(rr0); st.add_vertex(l1); st.add_vertex(rr1)
 	st.generate_normals()
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
@@ -749,14 +804,15 @@ func _setup_road() -> void:
 		# packs more grain per metre once both maps are in place.
 		var v0: float = float(p0["distance_m"]) / TEX_TILE_M
 		var v1: float = float(p1["distance_m"]) / TEX_TILE_M
-		# Two triangles forming the quad. CCW from above so the surface
-		# normal points +Y (up) — visible to a camera looking down at it.
+		# Two triangles forming the quad, wound clockwise-from-camera so
+		# generate_normals() gives +Y (Godot's front-face convention) and
+		# the sun lights the asphalt instead of just ambient.
 		asphalt.set_uv(Vector2(0.0, v0)); asphalt.add_vertex(left0)
-		asphalt.set_uv(Vector2(1.0, v0)); asphalt.add_vertex(right0)
 		asphalt.set_uv(Vector2(0.0, v1)); asphalt.add_vertex(left1)
 		asphalt.set_uv(Vector2(1.0, v0)); asphalt.add_vertex(right0)
+		asphalt.set_uv(Vector2(1.0, v0)); asphalt.add_vertex(right0)
+		asphalt.set_uv(Vector2(0.0, v1)); asphalt.add_vertex(left1)
 		asphalt.set_uv(Vector2(1.0, v1)); asphalt.add_vertex(right1)
-		asphalt.set_uv(Vector2(0.0, v1)); asphalt.add_vertex(left1)
 	asphalt.generate_normals()
 	asphalt.generate_tangents()  # needed for the asphalt normal map to light correctly
 	var asphalt_inst := MeshInstance3D.new()
@@ -786,13 +842,13 @@ func _setup_road() -> void:
 		var fr := center + ahead + right * dash_half_w
 		var br := center - ahead + right * dash_half_w
 		var bl := center - ahead - right * dash_half_w
-		# CCW from above so the dash surface normal points +Y.
+		# Clockwise-from-camera so the dash surface normal points +Y.
 		dashes.add_vertex(bl)
-		dashes.add_vertex(br)
 		dashes.add_vertex(fl)
 		dashes.add_vertex(br)
+		dashes.add_vertex(br)
+		dashes.add_vertex(fl)
 		dashes.add_vertex(fr)
-		dashes.add_vertex(fl)
 	dashes.generate_normals()
 	var dash_inst := MeshInstance3D.new()
 	dash_inst.mesh = dashes.commit()

@@ -50,16 +50,18 @@ void fragment() {
 
 
 static func build() -> ShaderMaterial:
+	# Generate the noise image synchronously. NoiseTexture2D fills its image
+	# on a background thread, and a ShaderMaterial sampler bound before that
+	# completes keeps sampling the white fallback forever — which rendered
+	# the whole terrain white. get_seamless_image blocks (~tens of ms, once
+	# per ride) and gives us a ready texture up front.
 	var noise := FastNoiseLite.new()
 	noise.noise_type = FastNoiseLite.TYPE_PERLIN
 	noise.frequency = 0.02
 	noise.fractal_octaves = 4
-	var tex := NoiseTexture2D.new()
-	tex.noise = noise
-	tex.width = 512
-	tex.height = 512
-	tex.seamless = true
-	tex.seamless_blend_skirt = 0.10
+	var img := noise.get_seamless_image(512, 512, false, false, 0.10)
+	img.generate_mipmaps()
+	var tex := ImageTexture.create_from_image(img)
 
 	var shader := Shader.new()
 	shader.code = SHADER_CODE

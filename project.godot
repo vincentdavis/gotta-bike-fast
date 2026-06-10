@@ -14,8 +14,8 @@ config/name="GOTTA_BIKE_FAST"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
-config/windows_native_icon="res://branding/icon.ico"
 config/macos_native_icon="res://branding/icon.icns"
+config/windows_native_icon="res://branding/icon.ico"
 
 [autoload]
 
@@ -33,6 +33,5 @@ SensorBridge="*res://scripts/network/sensor_bridge.gd"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
