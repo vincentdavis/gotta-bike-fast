@@ -108,6 +108,15 @@ func apply_sun_quality(sun: DirectionalLight3D) -> void:
 		sun.shadow_blur = 1.0
 
 
+func tree_count() -> int:
+	# Roadside scenery density for _setup_scenery — the per-tree cost is
+	# small (MultiMesh), but vertex + overdraw load still scales with count.
+	match quality:
+		Quality.LOW: return 160
+		Quality.MEDIUM: return 320
+		_: return 520
+
+
 func quality_name() -> String:
 	match quality:
 		Quality.LOW: return "Low"

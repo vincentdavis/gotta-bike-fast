@@ -27,6 +27,10 @@ const DRAFT_MAX_LATERAL_M := 2.0
 const DRAFT_FULL_REDUCTION := 0.35  # max CdA savings at perfect draft
 
 var rider_node: Node3D
+var _player_visual: RiderVisual
+# Shared ground shader (terrain mesh + ground strip), built lazily so both
+# use the same noise texture and the colors match seamlessly.
+var _ground_shader_material: ShaderMaterial = null
 # Intermediate node that holds the rider visual + bib label. It pitches
 # with the road grade so the bike rolls along the tilted surface, but the
 # camera (a sibling on rider_node) stays at a fixed look angle.
@@ -63,6 +67,7 @@ var _local_jsonl_path: String = ""
 var _pending_uploads: Array = []
 
 var _ghosts: Dictionary = {}  # rider_id (String) -> Node3D
+var _ghost_visuals: Dictionary = {}  # rider_id -> RiderVisual (animated rig)
 var _ghost_targets: Dictionary = {}  # rider_id -> {pos, velocity, yaw, t_ms}
 var _ghost_names: Dictionary = {}  # rider_id -> display_name
 var _ghost_bibs: Dictionary = {}  # rider_id -> bib_number
@@ -468,10 +473,7 @@ func _build_terrain_mesh() -> void:
 
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.30, 0.45, 0.25)
-	mat.roughness = 1.0
-	inst.material_override = mat
+	inst.material_override = _ground_material()
 	add_child(inst)
 	_terrain_inst = inst
 
@@ -563,13 +565,17 @@ func _setup_ground_strip() -> void:
 	st.generate_normals()
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.34, 0.55, 0.28)
-	mat.roughness = 1.0
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	inst.material_override = mat
+	inst.material_override = _ground_material()
 	add_child(inst)
 	_ground_strip_inst = inst
+
+
+func _ground_material() -> ShaderMaterial:
+	# Shared between the ground strip and the heightmap terrain so colors
+	# match exactly where they meet (both sample world-space noise).
+	if _ground_shader_material == null:
+		_ground_shader_material = TerrainMaterial.build()
+	return _ground_shader_material
 
 
 func _compute_course_path() -> void:
@@ -906,11 +912,12 @@ func _setup_markers() -> void:
 
 
 func _setup_scenery() -> void:
-	# Trees scattered inside the bounding box of the path, rejecting any
-	# candidate too close to the road centerline. Single MultiMesh = one
-	# draw call. POC: trees sit on the flat ground plane (y=0); a future
-	# terrain pass will lift them to the local ground height.
-	const TREE_COUNT := 300
+	# Mixed-variety forest (pine / oak / poplar / bush from SceneryFactory)
+	# scattered inside the bounding box of the path, rejecting candidates
+	# too close to the road centerline. One MultiMesh per variety = four
+	# draw calls; instance colors give per-tree foliage hue variation.
+	# Density scales with the quality preset.
+	var tree_count: int = GraphicsSettings.tree_count()
 	const PADDING := 80.0
 	const MIN_DIST_TO_ROAD := 6.0
 	if _course_path.size() < 2:
@@ -933,24 +940,16 @@ func _setup_scenery() -> void:
 	min_z -= PADDING
 	max_z += PADDING
 
-	var trees := MultiMesh.new()
-	trees.transform_format = MultiMesh.TRANSFORM_3D
-	trees.use_colors = true
-	trees.instance_count = TREE_COUNT
-
-	var tree_mesh := CylinderMesh.new()
-	tree_mesh.top_radius = 0.0
-	tree_mesh.bottom_radius = 0.9
-	tree_mesh.height = 3.5
-	trees.mesh = tree_mesh
-
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xB1CE_F00D
 	var min_d2_threshold := MIN_DIST_TO_ROAD * MIN_DIST_TO_ROAD
 
+	# Collect placements per variety, then build one MultiMesh per variety
+	# (instance_count must be known up front).
+	var placements: Array = [[], [], [], []]
 	var placed := 0
 	var attempts := 0
-	while placed < TREE_COUNT and attempts < TREE_COUNT * 8:
+	while placed < tree_count and attempts < tree_count * 8:
 		attempts += 1
 		var x := rng.randf_range(min_x, max_x)
 		var z := rng.randf_range(min_z, max_z)
@@ -970,32 +969,71 @@ func _setup_scenery() -> void:
 					break
 		if min_d2 < min_d2_threshold:
 			continue
-		var s := rng.randf_range(0.7, 1.4)
-		var basis := Basis().scaled(Vector3.ONE * s)
 		# If a heightmap is loaded, plant the tree on the terrain. Otherwise
-		# fall back to the nearest path waypoint's elevation (POC behaviour
-		# when no heightmap is available).
+		# fall back to the nearest path waypoint's elevation.
 		var ground_y: float = nearest_ele
 		if _terrain_width >= 2:
 			ground_y = _terrain_height_at(x, z)
-		var origin := Vector3(x, ground_y + tree_mesh.height * 0.5 * s, z)
-		trees.set_instance_transform(placed, Transform3D(basis, origin))
-		var g := rng.randf_range(0.30, 0.50)
-		trees.set_instance_color(placed, Color(0.10, g, 0.12))
+		var variety := _pick_tree_variety(rng)
+		placements[variety].append({
+			"pos": Vector3(x, ground_y, z),
+			"scale": _tree_scale(rng, variety),
+			"yaw": rng.randf_range(0.0, TAU),
+			"color": _tree_foliage_color(rng, variety),
+		})
 		placed += 1
 
-	# Collapse unused slots so we don't draw stray trees at origin.
-	for i in range(placed, TREE_COUNT):
-		trees.set_instance_transform(i, Transform3D().scaled(Vector3.ZERO))
+	for variety in SceneryFactory.VARIETY_COUNT:
+		var list: Array = placements[variety]
+		if list.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = SceneryFactory.variety_mesh(variety)
+		mm.instance_count = list.size()
+		for i in list.size():
+			var t: Dictionary = list[i]
+			var basis := Basis(Vector3.UP, float(t["yaw"])).scaled(Vector3.ONE * float(t["scale"]))
+			mm.set_instance_transform(i, Transform3D(basis, t["pos"]))
+			mm.set_instance_color(i, t["color"])
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		# Materials live on the mesh surfaces (brown trunk + tintable
+		# foliage) — no override, or the per-surface split would be lost.
+		add_child(inst)
 
-	var inst := MultiMeshInstance3D.new()
-	inst.multimesh = trees
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.9
-	inst.material_override = mat
-	add_child(inst)
+
+func _pick_tree_variety(rng: RandomNumberGenerator) -> int:
+	var roll := rng.randf()
+	if roll < 0.32:
+		return SceneryFactory.Variety.PINE
+	if roll < 0.62:
+		return SceneryFactory.Variety.OAK
+	if roll < 0.76:
+		return SceneryFactory.Variety.POPLAR
+	return SceneryFactory.Variety.BUSH
+
+
+func _tree_scale(rng: RandomNumberGenerator, variety: int) -> float:
+	match variety:
+		SceneryFactory.Variety.PINE: return rng.randf_range(0.8, 1.6)
+		SceneryFactory.Variety.OAK: return rng.randf_range(0.7, 1.3)
+		SceneryFactory.Variety.POPLAR: return rng.randf_range(0.9, 1.5)
+		_: return rng.randf_range(0.7, 1.1)
+
+
+func _tree_foliage_color(rng: RandomNumberGenerator, variety: int) -> Color:
+	match variety:
+		SceneryFactory.Variety.PINE:
+			# Darker blue-greens.
+			return Color(rng.randf_range(0.08, 0.14), rng.randf_range(0.30, 0.42), rng.randf_range(0.14, 0.20))
+		SceneryFactory.Variety.POPLAR:
+			# Yellow-greens.
+			return Color(rng.randf_range(0.26, 0.36), rng.randf_range(0.42, 0.52), rng.randf_range(0.14, 0.20))
+		_:
+			# Oak / bush: mid greens.
+			return Color(rng.randf_range(0.13, 0.22), rng.randf_range(0.38, 0.52), rng.randf_range(0.14, 0.22))
 
 
 func _setup_sun() -> void:
@@ -1044,134 +1082,8 @@ func _setup_rider() -> void:
 	rider_visual_node = Node3D.new()
 	rider_visual_node.name = "RiderVisual"
 	rider_node.add_child(rider_visual_node)
-	rider_visual_node.add_child(_build_rider_visual(PLAYER_COLOR))
-
-
-func _build_rider_visual(albedo: Color) -> Node3D:
-	# Stylized cyclist on a bike. Primitive meshes only; for the real
-	# jersey graphic we'd need a UV-unwrapped humanoid model. The jersey
-	# uses `albedo` as the main colour and an orange chest accent.
-	var root := Node3D.new()
-
-	var jersey := StandardMaterial3D.new()
-	jersey.albedo_color = albedo
-	var bibs := StandardMaterial3D.new()
-	bibs.albedo_color = Color(0.07, 0.07, 0.08)
-	var skin := StandardMaterial3D.new()
-	skin.albedo_color = Color(0.93, 0.78, 0.65)
-	var helmet_mat := StandardMaterial3D.new()
-	helmet_mat.albedo_color = Color(0.92, 0.92, 0.92)
-	helmet_mat.roughness = 0.4
-	var rubber := StandardMaterial3D.new()
-	rubber.albedo_color = Color(0.07, 0.07, 0.07)
-	rubber.roughness = 0.7
-	var accent_mat := StandardMaterial3D.new()
-	accent_mat.albedo_color = Color(0.95, 0.45, 0.15)
-
-	const LEAN_DEG := -28.0
-
-	# Torso (forward aero lean).
-	var torso := MeshInstance3D.new()
-	var torso_mesh := CapsuleMesh.new()
-	torso_mesh.radius = 0.18
-	torso_mesh.height = 0.80
-	torso.mesh = torso_mesh
-	torso.position = Vector3(0.0, 1.05, 0.0)
-	torso.rotation_degrees = Vector3(LEAN_DEG, 0.0, 0.0)
-	torso.material_override = jersey
-	root.add_child(torso)
-
-	# Orange chest stripe.
-	var stripe := MeshInstance3D.new()
-	var stripe_mesh := BoxMesh.new()
-	stripe_mesh.size = Vector3(0.36, 0.10, 0.04)
-	stripe.mesh = stripe_mesh
-	# Front-of-torso, upper, leaning with the rider.
-	stripe.position = Vector3(0.0, 1.28, -0.20)
-	stripe.rotation_degrees = Vector3(LEAN_DEG, 0.0, 0.0)
-	stripe.material_override = accent_mat
-	root.add_child(stripe)
-
-	# Head + helmet (also tilted with the lean).
-	var head := MeshInstance3D.new()
-	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.12
-	head_mesh.height = 0.26
-	head.mesh = head_mesh
-	head.position = Vector3(0.0, 1.62, -0.30)
-	head.material_override = skin
-	root.add_child(head)
-
-	var helmet := MeshInstance3D.new()
-	var helmet_mesh := SphereMesh.new()
-	helmet_mesh.radius = 0.14
-	helmet_mesh.height = 0.20
-	helmet.mesh = helmet_mesh
-	helmet.position = Vector3(0.0, 1.70, -0.32)
-	helmet.material_override = helmet_mat
-	root.add_child(helmet)
-
-	# Arms reaching for the handlebars.
-	var arm_mesh := CapsuleMesh.new()
-	arm_mesh.radius = 0.055
-	arm_mesh.height = 0.55
-	for x_off in [-0.16, 0.16]:
-		var arm := MeshInstance3D.new()
-		arm.mesh = arm_mesh
-		arm.material_override = jersey
-		arm.position = Vector3(x_off, 1.18, -0.30)
-		arm.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
-		root.add_child(arm)
-
-	# Legs (bib shorts) — vertical, atop the bottom bracket.
-	var leg_mesh := CapsuleMesh.new()
-	leg_mesh.radius = 0.075
-	leg_mesh.height = 0.75
-	for x_off in [-0.09, 0.09]:
-		var leg := MeshInstance3D.new()
-		leg.mesh = leg_mesh
-		leg.material_override = bibs
-		leg.position = Vector3(x_off, 0.62, 0.05)
-		root.add_child(leg)
-
-	# Wheels.
-	var wheel_mesh := CylinderMesh.new()
-	wheel_mesh.height = 0.05
-	wheel_mesh.top_radius = 0.34
-	wheel_mesh.bottom_radius = 0.34
-	for z_offset in [-0.55, 0.55]:
-		var wheel := MeshInstance3D.new()
-		wheel.mesh = wheel_mesh
-		wheel.material_override = rubber
-		wheel.position = Vector3(0.0, 0.34, z_offset)
-		wheel.rotation_degrees = Vector3(0.0, 0.0, 90.0)
-		root.add_child(wheel)
-
-	# Bike frame (top tube, painted to match jersey).
-	var frame := MeshInstance3D.new()
-	var frame_mesh := CylinderMesh.new()
-	frame_mesh.height = 1.05
-	frame_mesh.top_radius = 0.035
-	frame_mesh.bottom_radius = 0.035
-	frame.mesh = frame_mesh
-	frame.material_override = jersey
-	frame.position = Vector3(0.0, 0.58, 0.0)
-	frame.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	root.add_child(frame)
-
-	# Handlebars: a small horizontal bar at the front, dark.
-	var bars := MeshInstance3D.new()
-	var bars_mesh := CylinderMesh.new()
-	bars_mesh.height = 0.42
-	bars_mesh.top_radius = 0.018
-	bars_mesh.bottom_radius = 0.018
-	bars.mesh = bars_mesh
-	bars.material_override = bibs
-	bars.position = Vector3(0.0, 0.92, -0.50)
-	bars.rotation_degrees = Vector3(0.0, 0.0, 90.0)
-	root.add_child(bars)
-
-	return root
+	_player_visual = RiderVisual.new(PLAYER_COLOR)
+	rider_visual_node.add_child(_player_visual)
 
 
 func _setup_camera() -> void:
@@ -1417,6 +1329,19 @@ func _update_power_input(delta: float) -> void:
 		target_power_w = max(target_power_w - POWER_RATE_WPS * delta, 0.0)
 
 
+func _animation_cadence() -> float:
+	# Real crank cadence when a sensor is feeding us; otherwise a plausible
+	# estimate so the legs still pedal on keyboard power. Zero when coasting.
+	if SensorBridge.has_fresh_cadence():
+		return SensorBridge.latest_cadence_rpm
+	if target_power_w < 5.0:
+		return 0.0
+	if velocity_mps > 0.5:
+		return clampf(58.0 + velocity_mps * 3.6 * 1.15, 60.0, 105.0)
+	# Stationary but pedalling (pre-race pen warm-up).
+	return clampf(60.0 + target_power_w / 8.0, 60.0, 100.0)
+
+
 func _trainer_hud_text() -> String:
 	# Small HUD tag showing the smart-trainer control mode, if a controllable
 	# trainer is connected. Empty string hides the row.
@@ -1536,6 +1461,10 @@ func _physics_process(delta: float) -> void:
 		_trainer_accum_s = 0.0
 		if SensorBridge.trainer_mode == SensorBridge.TrainerMode.SIM:
 			SensorBridge.send_sim_grade(gradient * 100.0, kit.tires.crr)
+
+	# Animate the player's rig: wheels from road speed, legs/cranks from
+	# cadence (real sensor cadence when fresh), torso sway from power.
+	_player_visual.animate(delta, velocity_mps, _animation_cadence(), target_power_w)
 
 	var sensor_power: bool = SensorBridge.using_sensor() and SensorBridge.has_fresh_power()
 	hud.set_power(target_power_w, sensor_power)
@@ -1834,6 +1763,7 @@ func _on_rider_left(rid: String) -> void:
 	if _ghosts.has(rid):
 		_ghosts[rid].queue_free()
 		_ghosts.erase(rid)
+	_ghost_visuals.erase(rid)
 	_ghost_targets.erase(rid)
 	_ghost_names.erase(rid)
 	_ghost_bibs.erase(rid)
@@ -1861,9 +1791,11 @@ func _spawn_ghost(rid: String, display_name: String = "", bib: int = 0) -> void:
 		return
 	var ghost := Node3D.new()
 	ghost.name = "Ghost_%s" % rid
-	ghost.add_child(_build_rider_visual(GHOST_COLOR))
+	var visual := RiderVisual.new(GHOST_COLOR)
+	ghost.add_child(visual)
 	add_child(ghost)
 	_ghosts[rid] = ghost
+	_ghost_visuals[rid] = visual
 	if not display_name.is_empty():
 		_ghost_names[rid] = display_name
 	if bib > 0:
@@ -1925,3 +1857,10 @@ func _update_ghost_visuals(delta: float) -> void:
 		# WS protocol doesn't carry Y; plant the ghost on the same road we render.
 		ghost.global_position.y = _elevation_at_distance(-ghost.global_position.z)
 		ghost.rotation.y = lerp_angle(ghost.rotation.y, t["yaw"], smoothing)
+		# Animate the ghost's rig from its reported speed (cadence estimated —
+		# the wire protocol doesn't carry it).
+		var gv: RiderVisual = _ghost_visuals.get(rid)
+		if gv != null:
+			var gspeed: float = (t["velocity"] as Vector3).length()
+			var gcad: float = 0.0 if gspeed < 0.5 else clampf(58.0 + gspeed * 3.6 * 1.15, 60.0, 105.0)
+			gv.animate(delta, gspeed, gcad, 0.0)
