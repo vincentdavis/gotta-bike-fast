@@ -76,9 +76,11 @@ func _ready() -> void:
 	_apply_auth_state()
 	if ApiClient.is_authenticated():
 		_load_riders()
-		# Cached profile fields may be empty on a post-upgrade first launch.
-		if ApiClient.user_display_name.is_empty() and ApiClient.user_email.is_empty():
-			_fetch_user_async()
+		# Always refresh the profile on boot: the header + auth.cfg cache
+		# display_name, and a server-side correction (e.g. the scrub of
+		# display names that were actually passwords) must propagate here
+		# without requiring a re-login.
+		_fetch_user_async()
 
 
 func _fetch_user_async() -> void:
