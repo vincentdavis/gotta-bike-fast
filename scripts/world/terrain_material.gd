@@ -31,13 +31,15 @@ void fragment() {
 	float n_mid = texture(noise_tex, w_pos.xz * 0.030).r;
 	float n_fine = texture(noise_tex, w_pos.xz * 0.180).r;
 
-	// Grass: light/dark mottling, with large dry patches from the macro noise.
-	vec3 grass = mix(vec3(0.20, 0.34, 0.15), vec3(0.37, 0.53, 0.24),
+	// Grass: light/dark mottling, with large dry patches from the macro
+	// noise. Kept deliberately deep — the game's filmic tonemap + sky
+	// ambient lift everything, so pale source colors read washed-out.
+	vec3 grass = mix(vec3(0.13, 0.25, 0.09), vec3(0.27, 0.42, 0.16),
 		clamp(n_mid * 0.7 + n_fine * 0.3, 0.0, 1.0));
-	grass = mix(grass, vec3(0.46, 0.46, 0.25), smoothstep(0.58, 0.85, n_macro) * 0.55);
+	grass = mix(grass, vec3(0.36, 0.35, 0.17), smoothstep(0.60, 0.86, n_macro) * 0.45);
 
 	// Rock for steep faces.
-	vec3 rock = mix(vec3(0.31, 0.28, 0.25), vec3(0.47, 0.44, 0.40), n_fine);
+	vec3 rock = mix(vec3(0.24, 0.21, 0.18), vec3(0.38, 0.35, 0.31), n_fine);
 	float slope = 1.0 - clamp(w_up, 0.0, 1.0);
 	float rockiness = smoothstep(0.28, 0.55, slope + (n_mid - 0.5) * 0.16);
 

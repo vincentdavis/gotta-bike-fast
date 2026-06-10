@@ -366,15 +366,24 @@ func _setup_terrain_async() -> void:
 		)
 		return
 
-	# Decode pixel values into world elevations. Color.r is in [0, 1]
-	# regardless of the source PNG's bit depth, so this works whether
-	# Godot loaded the 16-bit PNG as 16-bit or downconverted to 8-bit.
+	# Decode pixel values into world elevations. Two encodings exist:
+	#  - legacy: 16-bit grayscale PNG, which Godot DOWNCONVERTS to 8 bits
+	#    (loads as FORMAT_L8) — quantized to range/255 steps, kept only so
+	#    courses pushed before the fix still render;
+	#  - rg16: RGB8 with the 16-bit value split R=high byte, G=low byte —
+	#    lossless through any decoder (value = R*256 + G).
 	var range_m: float = _terrain_max_ele - _terrain_min_ele
+	var rg16: bool = img.get_format() != Image.FORMAT_L8
 	_terrain_heights.resize(w * h)
 	for y in h:
 		for x in w:
 			var c := img.get_pixel(x, y)
-			_terrain_heights[y * w + x] = _terrain_min_ele + c.r * range_m
+			var t: float
+			if rg16:
+				t = (roundf(c.r * 255.0) * 256.0 + roundf(c.g * 255.0)) / 65535.0
+			else:
+				t = c.r
+			_terrain_heights[y * w + x] = _terrain_min_ele + t * range_m
 
 	# Pin a corridor of terrain under the road BEFORE meshing — the DEM and
 	# the GPX's own elevations disagree by metres in places, which used to
@@ -450,24 +459,29 @@ func _clear_existing_scenery() -> void:
 
 
 func _carve_road_corridor() -> void:
-	# Blend the heightmap toward (path elevation − DROP_M) within OUTER_M of
-	# the course centerline, fully pinned inside INNER_M. Where multiple path
+	# Blend the heightmap toward (path elevation − DROP_M) within outer_m of
+	# the course centerline, fully pinned inside inner_m. Where multiple path
 	# points influence a cell, the strongest (nearest) wins. This guarantees
 	# the road sits proud of the terrain everywhere along the route while the
 	# corridor's edges fade smoothly back into the real DEM.
-	const INNER_M := 6.0
-	const OUTER_M := 28.0
 	const DROP_M := 0.35
 	if _terrain_width < 2 or _terrain_grid_m <= 0.0 or _course_path.size() < 2:
 		return
 	var g := _terrain_grid_m
 	var w := _terrain_width
 	var h := _terrain_height
+	# Radii must scale with the grid: long routes get coarse heightmaps
+	# (40–60 m between vertices), and a fixed radius smaller than the
+	# spacing misses every vertex near most of the road. Pinning ~1.3
+	# cells fully guarantees all corners of any cell the road crosses sit
+	# below it, so the triangulated surface can't poke through.
+	var inner_m := maxf(6.0, g * 1.3)
+	var outer_m := maxf(28.0, g * 2.4)
 	var carve_w := PackedFloat32Array()
 	carve_w.resize(w * h)  # zero-filled
 	var carve_ele := PackedFloat32Array()
 	carve_ele.resize(w * h)
-	var reach := int(ceil(OUTER_M / g)) + 1
+	var reach := int(ceil(outer_m / g)) + 1
 	for p in _course_path:
 		# Path x/y are in the same local frame as the heightmap origin.
 		var cx := (float(p["x_m"]) - _terrain_origin_x_m) / g
@@ -482,9 +496,9 @@ func _carve_road_corridor() -> void:
 				var dx := (float(ix) - cx) * g
 				var dy := (float(iy) - cy) * g
 				var dist := sqrt(dx * dx + dy * dy)
-				if dist >= OUTER_M:
+				if dist >= outer_m:
 					continue
-				var wgt := 1.0 - smoothstep(INNER_M, OUTER_M, dist)
+				var wgt := 1.0 - smoothstep(inner_m, outer_m, dist)
 				var idx := iy * w + ix
 				if wgt > carve_w[idx]:
 					carve_w[idx] = wgt
