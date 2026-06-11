@@ -147,6 +147,50 @@ text = "Graphics settings apply immediately and are saved on this device."
 theme_override_font_sizes/font_size = 13
 modulate = Color(0.75, 0.75, 0.75, 1)
 
+[node name="SectionHud" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "HUD appearance"
+theme_override_font_sizes/font_size = 22
+
+[node name="HudBgColorLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Panel background color"
+theme_override_font_sizes/font_size = 16
+
+[node name="HudBgColorPicker" type="ColorPickerButton" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 32)
+edit_alpha = false
+
+[node name="HudOpacityLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Panel opacity: 62%"
+theme_override_font_sizes/font_size = 16
+
+[node name="HudOpacitySlider" type="HSlider" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(260, 0)
+min_value = 0.0
+max_value = 1.0
+step = 0.01
+
+[node name="HudTextColorLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Text color"
+theme_override_font_sizes/font_size = 16
+
+[node name="HudTextColorPicker" type="ColorPickerButton" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(200, 32)
+edit_alpha = false
+
+[node name="HudHint" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Background + text colour for the stats, leaderboard, and map. Applies on the next ride."
+theme_override_font_sizes/font_size = 13
+autowrap_mode = 2
+modulate = Color(0.75, 0.75, 0.75, 1)
+
 [node name="SectionAudio" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
 text = "Audio (placeholder)"

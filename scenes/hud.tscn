@@ -75,66 +75,74 @@ theme_override_colors/font_color = Color(1, 0.95, 0.6, 1)
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="VBox" type="VBoxContainer" parent="."]
-offset_left = 20.0
-offset_top = 20.0
-offset_right = 420.0
-offset_bottom = 260.0
+[node name="StatsPanel" type="PanelContainer" parent="."]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 360.0
+offset_bottom = 380.0
+
+[node name="Margin" type="MarginContainer" parent="StatsPanel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="StatsPanel/Margin"]
 theme_override_constants/separation = 4
 
-[node name="PowerLabel" type="Label" parent="VBox"]
+[node name="PowerLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Power: 0 W"
 theme_override_font_sizes/font_size = 24
 
-[node name="CadenceLabel" type="Label" parent="VBox"]
+[node name="CadenceLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 visible = false
 text = ""
 theme_override_font_sizes/font_size = 24
 
-[node name="SpeedLabel" type="Label" parent="VBox"]
+[node name="SpeedLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Speed: 0.0 km/h"
 theme_override_font_sizes/font_size = 24
 
-[node name="HeartRateLabel" type="Label" parent="VBox"]
+[node name="HeartRateLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 visible = false
 text = ""
 theme_override_font_sizes/font_size = 24
 
-[node name="TrainerLabel" type="Label" parent="VBox"]
+[node name="TrainerLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 visible = false
 text = ""
 theme_override_font_sizes/font_size = 18
 modulate = Color(0.6, 0.85, 1, 1)
 
-[node name="DistanceLabel" type="Label" parent="VBox"]
+[node name="DistanceLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Distance: 0 m"
 theme_override_font_sizes/font_size = 24
 
-[node name="LapLabel" type="Label" parent="VBox"]
+[node name="LapLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Lap: 1"
 theme_override_font_sizes/font_size = 24
 
-[node name="GradeLabel" type="Label" parent="VBox"]
+[node name="GradeLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Grade: +0.0%"
 theme_override_font_sizes/font_size = 24
 
-[node name="TimeLabel" type="Label" parent="VBox"]
+[node name="TimeLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Time: 0:00"
 theme_override_font_sizes/font_size = 24
 
-[node name="DraftLabel" type="Label" parent="VBox"]
+[node name="DraftLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "Draft: 0%"
 theme_override_font_sizes/font_size = 24
 
-[node name="CourseLabel" type="Label" parent="VBox"]
+[node name="CourseLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = ""
 theme_override_font_sizes/font_size = 18
 
-[node name="HintLabel" type="Label" parent="VBox"]
+[node name="HintLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = "↑↓ power · ←→ lane · T turn · C/V or 1–9 camera · Space coast · Esc finish"
 theme_override_font_sizes/font_size = 16
 
-[node name="StatusLabel" type="Label" parent="VBox"]
+[node name="StatusLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = ""
 theme_override_font_sizes/font_size = 18
 

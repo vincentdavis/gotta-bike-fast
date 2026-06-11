@@ -34,6 +34,17 @@ var frame_limit: int = FrameLimit.VSYNC
 var fullscreen: bool = false
 var show_fps: bool = false
 
+# HUD appearance — the background panel + text colour shared by the stats
+# column, the leaderboard, and the minimap. Background colour is stored RGB-
+# only; opacity is separate so the two are independent sliders/pickers. Applied
+# when the ride's HUD is built (next ride, like the quality preset).
+const DEFAULT_HUD_BG := Color(0.10, 0.11, 0.14)
+const DEFAULT_HUD_OPACITY := 0.62
+const DEFAULT_HUD_TEXT := Color("e3d8bc")  # aged cream
+var hud_bg_color: Color = DEFAULT_HUD_BG
+var hud_bg_opacity: float = DEFAULT_HUD_OPACITY
+var hud_text_color: Color = DEFAULT_HUD_TEXT
+
 var _fps_layer: CanvasLayer = null
 var _fps_label: Label = null
 var _fps_accum: float = 0.0
@@ -74,6 +85,34 @@ func set_show_fps(value: bool) -> void:
 	show_fps = value
 	_apply_fps_overlay()
 	_save()
+
+
+# HUD appearance setters — saved immediately; applied when the next ride's HUD
+# is built (the HUD only exists during a ride). hud_appearance_changed lets a
+# live HUD refresh too, if one is listening.
+signal hud_appearance_changed
+
+func set_hud_bg_color(value: Color) -> void:
+	hud_bg_color = Color(value.r, value.g, value.b)  # keep opacity separate
+	_save()
+	hud_appearance_changed.emit()
+
+
+func set_hud_bg_opacity(value: float) -> void:
+	hud_bg_opacity = clampf(value, 0.0, 1.0)
+	_save()
+	hud_appearance_changed.emit()
+
+
+func set_hud_text_color(value: Color) -> void:
+	hud_text_color = Color(value.r, value.g, value.b, 1.0)
+	_save()
+	hud_appearance_changed.emit()
+
+
+func hud_bg_style() -> Color:
+	# The background colour with the configured opacity folded into its alpha.
+	return Color(hud_bg_color.r, hud_bg_color.g, hud_bg_color.b, hud_bg_opacity)
 
 
 # --- ride-quality hooks ---
@@ -224,6 +263,9 @@ func _load() -> void:
 	frame_limit = clampi(int(cfg.get_value("graphics", "frame_limit", FrameLimit.VSYNC)), FrameLimit.VSYNC, FrameLimit.UNCAPPED)
 	fullscreen = bool(cfg.get_value("graphics", "fullscreen", false))
 	show_fps = bool(cfg.get_value("graphics", "show_fps", false))
+	hud_bg_color = cfg.get_value("hud", "bg_color", DEFAULT_HUD_BG)
+	hud_bg_opacity = clampf(float(cfg.get_value("hud", "bg_opacity", DEFAULT_HUD_OPACITY)), 0.0, 1.0)
+	hud_text_color = cfg.get_value("hud", "text_color", DEFAULT_HUD_TEXT)
 
 
 func _save() -> void:
@@ -233,4 +275,7 @@ func _save() -> void:
 	cfg.set_value("graphics", "frame_limit", frame_limit)
 	cfg.set_value("graphics", "fullscreen", fullscreen)
 	cfg.set_value("graphics", "show_fps", show_fps)
+	cfg.set_value("hud", "bg_color", hud_bg_color)
+	cfg.set_value("hud", "bg_opacity", hud_bg_opacity)
+	cfg.set_value("hud", "text_color", hud_text_color)
 	cfg.save(FILE)

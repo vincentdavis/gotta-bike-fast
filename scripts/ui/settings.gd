@@ -14,6 +14,10 @@ extends Control
 @onready var frame_option: OptionButton = $Margin/Scroll/VBox/FrameOption
 @onready var fullscreen_check: CheckBox = $Margin/Scroll/VBox/FullscreenCheck
 @onready var show_fps_check: CheckBox = $Margin/Scroll/VBox/ShowFPSCheck
+@onready var hud_bg_picker: ColorPickerButton = $Margin/Scroll/VBox/HudBgColorPicker
+@onready var hud_opacity_label: Label = $Margin/Scroll/VBox/HudOpacityLabel
+@onready var hud_opacity_slider: HSlider = $Margin/Scroll/VBox/HudOpacitySlider
+@onready var hud_text_picker: ColorPickerButton = $Margin/Scroll/VBox/HudTextColorPicker
 @onready var music_input: HSlider = $Margin/Scroll/VBox/MusicInput
 @onready var sfx_input: HSlider = $Margin/Scroll/VBox/SFXInput
 @onready var status_label: Label = $Margin/Scroll/VBox/StatusLabel
@@ -70,6 +74,31 @@ func _setup_graphics_controls() -> void:
 	show_fps_check.toggled.connect(
 		func(on: bool) -> void: GraphicsSettings.set_show_fps(on)
 	)
+
+	# HUD appearance — background colour + opacity + text colour, shared by the
+	# stats panel, leaderboard, and minimap. Applies on the next ride.
+	hud_bg_picker.color = GraphicsSettings.hud_bg_color
+	hud_bg_picker.color_changed.connect(
+		func(c: Color) -> void: GraphicsSettings.set_hud_bg_color(c)
+	)
+
+	hud_opacity_slider.value = GraphicsSettings.hud_bg_opacity
+	_update_hud_opacity_label(GraphicsSettings.hud_bg_opacity)
+	hud_opacity_slider.value_changed.connect(_on_hud_opacity_changed)
+
+	hud_text_picker.color = GraphicsSettings.hud_text_color
+	hud_text_picker.color_changed.connect(
+		func(c: Color) -> void: GraphicsSettings.set_hud_text_color(c)
+	)
+
+
+func _on_hud_opacity_changed(value: float) -> void:
+	GraphicsSettings.set_hud_bg_opacity(value)
+	_update_hud_opacity_label(value)
+
+
+func _update_hud_opacity_label(value: float) -> void:
+	hud_opacity_label.text = "Panel opacity: %d%%" % int(round(value * 100.0))
 
 
 func _on_scale_changed(value: float) -> void:

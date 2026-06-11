@@ -156,7 +156,7 @@ func _ready() -> void:
 	# per-pixel ink cost. HUD theming is cheap, so it always applies.
 	if GraphicsSettings.quality != GraphicsSettings.Quality.LOW:
 		add_child(BellevillePost.new())
-	hud.apply_belleville()
+	hud.apply_appearance()
 	# Road, markers, scenery depend on the chosen course — built post-pick
 	# inside _start_solo / _start_game via _build_course_visuals().
 	if GameSession.is_solo:
