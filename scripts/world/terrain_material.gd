@@ -78,13 +78,12 @@ static func build() -> ShaderMaterial:
 	mat.shader = shader
 	mat.set_shader_parameter("noise_tex", tex)
 
-	if Belleville.is_active():
-		# Muted sun-faded meadow: olive grass, mustard dry patches, umber rock.
-		# Quantized into painted bands to match the hand-drawn post-process.
-		mat.set_shader_parameter("grass_lo", Belleville.OLIVE.darkened(0.28))
-		mat.set_shader_parameter("grass_hi", Belleville.OLIVE.lerp(Belleville.BRONZE, 0.45))
-		mat.set_shader_parameter("dry_col", Belleville.BRONZE.lerp(Belleville.OCHRE, 0.4))
-		mat.set_shader_parameter("rock_lo", Belleville.UMBER.darkened(0.1))
-		mat.set_shader_parameter("rock_hi", Belleville.UMBER.lerp(Belleville.SAGE, 0.35))
-		mat.set_shader_parameter("posterize", 6.0)
+	# Muted sun-faded meadow: olive grass, mustard dry patches, umber rock,
+	# quantized into painted bands to match the hand-drawn post-process.
+	mat.set_shader_parameter("grass_lo", Belleville.OLIVE.darkened(0.28))
+	mat.set_shader_parameter("grass_hi", Belleville.OLIVE.lerp(Belleville.BRONZE, 0.45))
+	mat.set_shader_parameter("dry_col", Belleville.BRONZE.lerp(Belleville.OCHRE, 0.4))
+	mat.set_shader_parameter("rock_lo", Belleville.UMBER.darkened(0.1))
+	mat.set_shader_parameter("rock_hi", Belleville.UMBER.lerp(Belleville.SAGE, 0.35))
+	mat.set_shader_parameter("posterize", 6.0)
 	return mat

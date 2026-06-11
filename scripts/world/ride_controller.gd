@@ -124,11 +124,17 @@ var _ground_inst: MeshInstance3D = null
 # terrain (both surfaces driven by the same elevations).
 var _ground_strip_inst: MeshInstance3D = null
 
-# Belleville theme set-dressing (telegraph poles + distant skyline), parented
-# under one node so it can be rebuilt wholesale when terrain arrives. Held off
+# Belleville theme set-dressing — telegraph poles, path-anchored. Parented
+# under one node rebuilt wholesale when terrain arrives. Held off
 # _clear_existing_scenery's path (those are direct-child MultiMeshInstance3D);
-# this node is freed/rebuilt explicitly in _setup_belleville_dressing.
+# freed/rebuilt explicitly in _setup_belleville_dressing.
 var _belleville_dressing: Node3D = null
+# Distant mountains + leaning city — a rider-locked backdrop. Built once and
+# moved to the rider's position every physics tick, so the horizon stays
+# populated for the whole ride (a midpoint-anchored ring vanished into the fog
+# on long point-to-point courses) and a peak can never sit on the road the
+# rider is actually on (it's permanently distant — the rider never reaches it).
+var _backdrop: Node3D = null
 
 const GHOST_SMOOTH_RATE := 10.0  # higher = snappier, lower = smoother but more lag
 const GHOST_DEAD_RECKON_CAP_S := 1.0  # stop extrapolating after this much silence
@@ -142,17 +148,15 @@ func _ready() -> void:
 	_setup_rider()
 	_setup_camera()
 	_setup_hud()
-	# Belleville theme: the full-screen ink/posterize/grain post-process sits
-	# below the HUD and turns the (separately re-coloured) world into an aged
-	# hand-drawn picture. Built last so it composites over everything 3D.
-	# It's a 9-tap full-screen pass at OUTPUT resolution (render_scale doesn't
-	# touch it), so it's skipped at LOW quality — the muted palette + caricature
-	# still read as Belleville without the per-pixel ink cost. HUD theming is
-	# cheap and applies at every preset.
-	if Belleville.is_active():
-		if GraphicsSettings.quality != GraphicsSettings.Quality.LOW:
-			add_child(BellevillePost.new())
-		hud.apply_belleville()
+	# The full-screen ink/posterize/grain post-process sits below the HUD and
+	# turns the world into an aged hand-drawn picture. Built last so it
+	# composites over everything 3D. It's a 9-tap full-screen pass at OUTPUT
+	# resolution (render_scale doesn't touch it), so it's skipped at LOW
+	# quality — the muted palette + caricature still carry the look without the
+	# per-pixel ink cost. HUD theming is cheap, so it always applies.
+	if GraphicsSettings.quality != GraphicsSettings.Quality.LOW:
+		add_child(BellevillePost.new())
+	hud.apply_belleville()
 	# Road, markers, scenery depend on the chosen course — built post-pick
 	# inside _start_solo / _start_game via _build_course_visuals().
 	if GameSession.is_solo:
@@ -268,29 +272,28 @@ func _setup_environment() -> void:
 	env.adjustment_contrast = 1.05
 	env.adjustment_brightness = 1.0
 
-	# Belleville theme: repaint the atmosphere muted + flat, and drop the
-	# shiny/bloomy effects that fight a hand-drawn look. The post-process adds
-	# the ink + grain; here we just set a sun-faded sepia world.
-	if Belleville.is_active():
-		sky_mat.sky_top_color = Belleville.SAGE.darkened(0.05)
-		sky_mat.sky_horizon_color = Belleville.PAPER
-		sky_mat.sky_curve = 0.25
-		sky_mat.ground_bottom_color = Belleville.UMBER
-		sky_mat.ground_horizon_color = Belleville.PAPER_DARK
-		sky_mat.sun_angle_max = 18.0
-		sky_mat.sun_curve = 0.05
-		env.ambient_light_color = Belleville.PAPER
-		env.ambient_light_energy = 0.7
-		env.ssr_enabled = false
-		env.glow_enabled = false
-		env.volumetric_fog_albedo = Belleville.PAPER
-		env.fog_light_color = Belleville.PAPER
-		env.fog_density = 0.0009
-		# Desaturate toward sepia + lift contrast a touch; the duotone grade in
-		# the post-process finishes the job.
-		env.adjustment_saturation = 0.72
-		env.adjustment_contrast = 1.08
-		env.adjustment_brightness = 1.02
+	# Repaint the atmosphere muted + flat, dropping the shiny/bloomy effects
+	# that fight a hand-drawn look. The post-process adds the ink + grain; here
+	# we just set a sun-faded sepia world.
+	sky_mat.sky_top_color = Belleville.SAGE.darkened(0.05)
+	sky_mat.sky_horizon_color = Belleville.PAPER
+	sky_mat.sky_curve = 0.25
+	sky_mat.ground_bottom_color = Belleville.UMBER
+	sky_mat.ground_horizon_color = Belleville.PAPER_DARK
+	sky_mat.sun_angle_max = 18.0
+	sky_mat.sun_curve = 0.05
+	env.ambient_light_color = Belleville.PAPER
+	env.ambient_light_energy = 0.7
+	env.ssr_enabled = false
+	env.glow_enabled = false
+	env.volumetric_fog_albedo = Belleville.PAPER
+	env.fog_light_color = Belleville.PAPER
+	env.fog_density = 0.0009
+	# Desaturate toward sepia + lift contrast a touch; the duotone grade in
+	# the post-process finishes the job.
+	env.adjustment_saturation = 0.72
+	env.adjustment_contrast = 1.08
+	env.adjustment_brightness = 1.02
 
 	# Everything above is the HIGH look; the user's quality preset strips
 	# the expensive effects (SSR, volumetric fog, SSAO, glow) below HIGH.
@@ -321,13 +324,9 @@ func _setup_ground() -> void:
 	noise_tex.height = 512
 	noise_tex.seamless = true
 	var ramp := Gradient.new()
-	if Belleville.is_active():
-		# Muted olive/ochre meadow instead of vivid green.
-		ramp.set_color(0, Belleville.OLIVE.darkened(0.15))
-		ramp.set_color(1, Belleville.BRONZE.lerp(Belleville.OLIVE, 0.5))
-	else:
-		ramp.set_color(0, Color(0.22, 0.42, 0.20))
-		ramp.set_color(1, Color(0.44, 0.64, 0.32))
+	# Muted olive/ochre meadow.
+	ramp.set_color(0, Belleville.OLIVE.darkened(0.15))
+	ramp.set_color(1, Belleville.BRONZE.lerp(Belleville.OLIVE, 0.5))
 	noise_tex.color_ramp = ramp
 
 	var mat := StandardMaterial3D.new()
@@ -358,6 +357,7 @@ func _build_course_visuals() -> void:
 	_setup_markers()
 	_setup_scenery()
 	_setup_belleville_dressing()
+	_setup_backdrop()
 	# Async terrain fetch — populates _terrain_heights + adds the mesh
 	# beside the strip when it arrives. Re-places scenery onto the
 	# heightmap once it does.
@@ -1089,9 +1089,6 @@ func _setup_scenery() -> void:
 	# draw calls; instance colors give per-tree foliage hue variation.
 	# Density scales with the quality preset.
 	var tree_count: int = GraphicsSettings.tree_count()
-	# Resolve the theme once — the value is constant for the whole world build,
-	# so threading it avoids an autoload lookup per scattered tree.
-	var bel := Belleville.is_active()
 	const PADDING := 80.0
 	const MIN_DIST_TO_ROAD := 6.0
 	if _course_path.size() < 2:
@@ -1148,12 +1145,12 @@ func _setup_scenery() -> void:
 		var ground_y: float = nearest_ele - 0.35
 		if _terrain_width >= 2:
 			ground_y = _terrain_height_at(x, z)
-		var variety := _pick_tree_variety(rng, bel)
+		var variety := _pick_tree_variety(rng)
 		placements[variety].append({
 			"pos": Vector3(x, ground_y, z),
 			"scale": _tree_scale(rng, variety),
 			"yaw": rng.randf_range(0.0, TAU),
-			"color": _tree_foliage_color(rng, variety, bel),
+			"color": _tree_foliage_color(rng, variety),
 		})
 		placed += 1
 
@@ -1178,23 +1175,15 @@ func _setup_scenery() -> void:
 		add_child(inst)
 
 
-func _pick_tree_variety(rng: RandomNumberGenerator, bel: bool) -> int:
+func _pick_tree_variety(rng: RandomNumberGenerator) -> int:
+	# Lean on poplars — the tall roadside rows of the French countryside.
 	var roll := rng.randf()
-	if bel:
-		# Lean on poplars — the tall roadside rows of the French countryside.
-		if roll < 0.50:
-			return SceneryFactory.Variety.POPLAR
-		if roll < 0.74:
-			return SceneryFactory.Variety.OAK
-		if roll < 0.88:
-			return SceneryFactory.Variety.PINE
-		return SceneryFactory.Variety.BUSH
-	if roll < 0.32:
-		return SceneryFactory.Variety.PINE
-	if roll < 0.62:
-		return SceneryFactory.Variety.OAK
-	if roll < 0.76:
+	if roll < 0.50:
 		return SceneryFactory.Variety.POPLAR
+	if roll < 0.74:
+		return SceneryFactory.Variety.OAK
+	if roll < 0.88:
+		return SceneryFactory.Variety.PINE
 	return SceneryFactory.Variety.BUSH
 
 
@@ -1206,29 +1195,18 @@ func _tree_scale(rng: RandomNumberGenerator, variety: int) -> float:
 		_: return rng.randf_range(0.7, 1.1)
 
 
-func _tree_foliage_color(rng: RandomNumberGenerator, variety: int, bel: bool) -> Color:
-	if bel:
-		# Dusty olive/sage/bronze foliage, slightly varied per tree, so the
-		# forest sits in the muted palette instead of vivid green.
-		var base: Color
-		match variety:
-			SceneryFactory.Variety.PINE:
-				base = Belleville.TEAL.lerp(Belleville.OLIVE, 0.5)
-			SceneryFactory.Variety.POPLAR:
-				base = Belleville.OLIVE.lerp(Belleville.BRONZE, 0.35)
-			_:
-				base = Belleville.OLIVE
-		return base.lerp(Belleville.SAGE, rng.randf_range(0.0, 0.3)).darkened(rng.randf_range(0.0, 0.12))
+func _tree_foliage_color(rng: RandomNumberGenerator, variety: int) -> Color:
+	# Dusty olive/sage/bronze foliage, slightly varied per tree, so the forest
+	# sits in the muted palette instead of vivid green.
+	var base: Color
 	match variety:
 		SceneryFactory.Variety.PINE:
-			# Darker blue-greens.
-			return Color(rng.randf_range(0.08, 0.14), rng.randf_range(0.30, 0.42), rng.randf_range(0.14, 0.20))
+			base = Belleville.TEAL.lerp(Belleville.OLIVE, 0.5)
 		SceneryFactory.Variety.POPLAR:
-			# Yellow-greens.
-			return Color(rng.randf_range(0.26, 0.36), rng.randf_range(0.42, 0.52), rng.randf_range(0.14, 0.20))
+			base = Belleville.OLIVE.lerp(Belleville.BRONZE, 0.35)
 		_:
-			# Oak / bush: mid greens.
-			return Color(rng.randf_range(0.13, 0.22), rng.randf_range(0.38, 0.52), rng.randf_range(0.14, 0.22))
+			base = Belleville.OLIVE
+	return base.lerp(Belleville.SAGE, rng.randf_range(0.0, 0.3)).darkened(rng.randf_range(0.0, 0.12))
 
 
 func _setup_belleville_dressing() -> void:
@@ -1239,7 +1217,7 @@ func _setup_belleville_dressing() -> void:
 	if _belleville_dressing != null:
 		_belleville_dressing.queue_free()
 		_belleville_dressing = null
-	if not Belleville.is_active() or _course_path.size() < 2:
+	if _course_path.size() < 2:
 		return
 
 	var root := Node3D.new()
@@ -1280,7 +1258,89 @@ func _setup_belleville_dressing() -> void:
 		inst.multimesh = mm
 		root.add_child(inst)
 
-	_add_belleville_skyline(root, total)
+
+func _setup_backdrop() -> void:
+	# The distant mountains + leaning city are built ONCE around the origin and
+	# then tracked to the rider every physics tick (see _physics_process), so
+	# the horizon is always populated regardless of where on the course the
+	# rider is. Independent of terrain, so it isn't rebuilt on terrain arrival.
+	if _backdrop != null:
+		return
+	_backdrop = Node3D.new()
+	_backdrop.name = "BellevilleBackdrop"
+	add_child(_backdrop)
+	_add_belleville_mountains(_backdrop)
+	_add_belleville_skyline(_backdrop)
+
+
+func _add_belleville_mountains(root: Node3D) -> void:
+	# Faceted distant peaks ringing the rider in two depth bands — a far,
+	# darker, hazier range and a nearer, lighter one — so the horizon reads
+	# with depth (the teal mountains of the mood board). One MultiMesh of a
+	# low-poly cone, per-instance scaled/leaned/tinted, placed around the
+	# backdrop origin (which tracks the rider). They sit far beyond the shadow
+	# range, so they cast nothing and the distance fog dissolves their bases.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0xA17175
+
+	# Unit cone with few radial segments → an angular, faceted peak.
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = 0.5
+	cone.height = 1.0
+	cone.radial_segments = 4  # sharp, faceted triangular peaks
+	cone.rings = 1
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color.WHITE
+	mat.vertex_color_use_as_albedo = true  # per-instance tint for depth banding
+	mat.roughness = 1.0
+	cone.material = mat
+
+	var xforms: Array = []
+	var colors: Array = []
+	# Two bands (radius/height/width ranges, count, base tint). The far band is
+	# only lightly darkened so the distance fog hazes it toward the sky; the
+	# near band is darker for crisp, saturated teal in front of it.
+	var bands := [
+		{
+			"r0": 780.0, "r1": 1180.0, "h0": 180.0, "h1": 340.0,
+			"w0": 180.0, "w1": 320.0, "n": 18, "tint": Belleville.TEAL.darkened(0.05),
+		},
+		{
+			"r0": 430.0, "r1": 720.0, "h0": 95.0, "h1": 190.0,
+			"w0": 120.0, "w1": 220.0, "n": 13, "tint": Belleville.TEAL.darkened(0.22),
+		},
+	]
+	for band in bands:
+		var n: int = int(band["n"])
+		var tint: Color = band["tint"]
+		for i in n:
+			# Even angular spread around the course, with jitter so it's not a
+			# perfect ring.
+			var ang := (float(i) / float(n)) * TAU + rng.randf_range(-0.12, 0.12)
+			var r := rng.randf_range(band["r0"], band["r1"])
+			var px := sin(ang) * r
+			var pz := cos(ang) * r
+			var h := rng.randf_range(band["h0"], band["h1"])
+			var w := rng.randf_range(band["w0"], band["w1"])
+			var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(w, h, w))
+			# Base ~20 m below the rider (the backdrop origin tracks the rider)
+			# so peaks rise from the horizon; cone is centre-origin, so lift by
+			# half its height.
+			xforms.append(Transform3D(basis, Vector3(px, -20.0 + h * 0.5, pz)))
+			colors.append(tint.darkened(rng.randf_range(0.0, 0.1)))
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = cone
+	mm.instance_count = xforms.size()
+	for i in xforms.size():
+		mm.set_instance_transform(i, xforms[i])
+		mm.set_instance_color(i, colors[i])
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = mm
+	root.add_child(inst)
 
 
 func _build_pole_mesh() -> ArrayMesh:
@@ -1305,18 +1365,18 @@ func _build_pole_mesh() -> ArrayMesh:
 	return mesh
 
 
-func _add_belleville_skyline(root: Node3D, total: float) -> void:
+func _add_belleville_skyline(root: Node3D) -> void:
 	# A distant clump of tall, slightly-leaning Art-Deco towers — a silhouette
 	# backdrop hazed into the fog, evoking the film's looming Belleville city.
+	# Placed in one fixed direction from the backdrop origin (which tracks the
+	# rider), so the city sits at a steady bearing on the horizon throughout.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0x5EA51DE
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Belleville.TEAL.darkened(0.12)
 	mat.roughness = 1.0
 
-	var mid := _position_at_distance(total * 0.5)
-	var dir := Vector3(0.62, 0.0, -0.78).normalized()  # off toward the light
-	var clump := mid + dir * 450.0
+	var clump := Vector3(0.62, 0.0, -0.78).normalized() * 480.0  # off toward the light
 
 	# One MultiMesh (one draw call) of a unit cube, scaled/leaned per instance —
 	# matches the pole path and keeps the backdrop to a single batch.
@@ -1351,16 +1411,11 @@ func _setup_sun() -> void:
 	# light so the heightmap mesh reads as three-dimensional.
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -35, 0)
-	sun.light_energy = 1.4
-	sun.light_color = Color(1.0, 0.97, 0.92)  # warm sunlight, faint amber cast
-
-	# Belleville: a low hazy sun — warmer, softer, a little dimmer, so the
-	# scene reads flat and illustrated rather than crisply lit.
-	if Belleville.is_active():
-		sun.light_energy = 1.1
-		sun.light_color = Belleville.OCHRE.lerp(Color.WHITE, 0.4)
-		sun.shadow_blur = 2.0
-		sun.shadow_opacity = 0.7
+	# A low hazy sun — warm, soft, a little dim — so the scene reads flat and
+	# illustrated rather than crisply lit.
+	sun.light_energy = 1.1
+	sun.light_color = Belleville.OCHRE.lerp(Color.WHITE, 0.4)
+	sun.shadow_opacity = 0.7
 
 	# Parallel split shadow maps — four cascades give crisp shadows under
 	# the rider while still covering scenery out to ~200 m without the
@@ -1378,7 +1433,7 @@ func _setup_sun() -> void:
 	# rider's shadow from detaching from his wheels on the road.
 	sun.shadow_bias = 0.05
 	sun.shadow_normal_bias = 1.5
-	sun.shadow_blur = 1.2
+	sun.shadow_blur = 2.0  # soft, hazy shadows to match the illustrated look
 
 	# Let the sun light the sky shader directly so the procedural sun disc
 	# matches our directional light direction, and skybox lighting shows up
@@ -1778,6 +1833,11 @@ func _physics_process(delta: float) -> void:
 	rider_node.global_position = (
 		center + right * _lateral_offset + Vector3(0, RIDER_GROUND_CLEARANCE, 0)
 	)
+	# Keep the distant backdrop (mountains + city) centred on the rider so it
+	# stays on the horizon for the whole ride. Position only — no rotation —
+	# so the peaks hold fixed world bearings as the rider turns.
+	if _backdrop != null:
+		_backdrop.global_position = rider_node.global_position
 	var face_y := _heading_at_distance(distance_m)
 	if heading == -1:
 		face_y += PI

@@ -42,43 +42,29 @@ var _wheel_phase := 0.0
 
 
 func _init(albedo: Color) -> void:
-	# Belleville theme: caricature the racer — Champion-style tree-trunk calves
-	# and thighs on a shrunken torso — and repaint everything in the muted
-	# palette with flat, matte materials so the ink/posterize post-process can
-	# do the line work.
-	var bel := Belleville.is_active()
-
+	# Belleville look: the racer is caricatured — Champion-style tree-trunk
+	# calves and thighs on a shrunken torso — and painted in the muted palette
+	# with flat, matte materials so the ink/posterize post-process does the
+	# line work. (The team `albedo` tints the jersey, pulled toward ochre.)
 	var jersey := StandardMaterial3D.new()
-	jersey.albedo_color = albedo
+	jersey.albedo_color = albedo.lerp(Belleville.OCHRE, 0.30)
+	jersey.roughness = 1.0
 	var bibs := StandardMaterial3D.new()
-	bibs.albedo_color = Color(0.07, 0.07, 0.08)
+	bibs.albedo_color = Belleville.INK
 	var skin := StandardMaterial3D.new()
-	skin.albedo_color = Color(0.93, 0.78, 0.65)
+	skin.albedo_color = Color(0.85, 0.72, 0.56)
 	var helmet_mat := StandardMaterial3D.new()
-	helmet_mat.albedo_color = Color(0.92, 0.92, 0.92)
-	helmet_mat.roughness = 0.4
+	helmet_mat.albedo_color = Belleville.OCHRE
+	helmet_mat.roughness = 1.0
 	var rubber := StandardMaterial3D.new()
-	rubber.albedo_color = Color(0.07, 0.07, 0.07)
+	rubber.albedo_color = Belleville.INK
 	rubber.roughness = 0.7
 	var accent := StandardMaterial3D.new()
-	accent.albedo_color = Color(0.95, 0.45, 0.15)
+	accent.albedo_color = Belleville.TERRACOTTA
 	var metal := StandardMaterial3D.new()
-	metal.albedo_color = Color(0.75, 0.76, 0.78)
-	metal.metallic = 0.6
-	metal.roughness = 0.35
-
-	if bel:
-		jersey.albedo_color = albedo.lerp(Belleville.OCHRE, 0.30)
-		jersey.roughness = 1.0
-		bibs.albedo_color = Belleville.INK
-		skin.albedo_color = Color(0.85, 0.72, 0.56)
-		helmet_mat.albedo_color = Belleville.OCHRE
-		helmet_mat.roughness = 1.0
-		rubber.albedo_color = Belleville.INK
-		accent.albedo_color = Belleville.TERRACOTTA
-		metal.albedo_color = Belleville.BRONZE
-		metal.metallic = 0.0  # kill the chrome specular — flat, illustrated
-		metal.roughness = 1.0
+	metal.albedo_color = Belleville.BRONZE
+	metal.metallic = 0.0  # flat, illustrated — no chrome specular
+	metal.roughness = 1.0
 
 	const LEAN_DEG := -28.0
 
@@ -88,7 +74,7 @@ func _init(albedo: Color) -> void:
 	add_child(_upper)
 
 	var torso := _part(CapsuleMesh.new(), jersey, Vector3(0, 0.10, -0.10))
-	(torso.mesh as CapsuleMesh).radius = 0.14 if bel else 0.18  # shrunken torso
+	(torso.mesh as CapsuleMesh).radius = 0.14  # shrunken torso (caricature)
 	(torso.mesh as CapsuleMesh).height = 0.80
 	torso.rotation_degrees = Vector3(LEAN_DEG, 0, 0)
 	_upper.add_child(torso)
@@ -161,10 +147,10 @@ func _init(albedo: Color) -> void:
 	add_child(_pedal_r)
 
 	var thigh_mesh := CapsuleMesh.new()
-	thigh_mesh.radius = 0.13 if bel else 0.075  # caricature: massive thighs
+	thigh_mesh.radius = 0.13  # caricature: massive thighs
 	thigh_mesh.height = 1.0  # unit length, stretched per frame
 	var shin_mesh := CapsuleMesh.new()
-	shin_mesh.radius = 0.115 if bel else 0.06  # caricature: tree-trunk calves
+	shin_mesh.radius = 0.115  # caricature: tree-trunk calves
 	shin_mesh.height = 1.0
 	_thigh_l = _part(thigh_mesh, bibs, Vector3.ZERO)
 	_thigh_r = _part(thigh_mesh, bibs, Vector3.ZERO)

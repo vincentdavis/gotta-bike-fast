@@ -86,23 +86,6 @@ layout_mode = 2
 text = "Graphics"
 theme_override_font_sizes/font_size = 22
 
-[node name="ThemeLabel" type="Label" parent="Margin/Scroll/VBox"]
-layout_mode = 2
-text = "Visual theme"
-theme_override_font_sizes/font_size = 16
-
-[node name="ThemeOption" type="OptionButton" parent="Margin/Scroll/VBox"]
-layout_mode = 2
-custom_minimum_size = Vector2(200, 0)
-theme_override_font_sizes/font_size = 18
-
-[node name="ThemeHint" type="Label" parent="Margin/Scroll/VBox"]
-layout_mode = 2
-text = "Belleville is a vintage hand-drawn look (sepia, ink lines). Classic is the realistic render. Applies on the next ride."
-theme_override_font_sizes/font_size = 13
-autowrap_mode = 2
-modulate = Color(0.75, 0.75, 0.75, 1)
-
 [node name="QualityLabel" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
 text = "Quality preset"
