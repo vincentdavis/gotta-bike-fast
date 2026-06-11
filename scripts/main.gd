@@ -502,6 +502,11 @@ func _on_login_submit() -> void:
 		return
 	_account_status.text = "Signing in…"
 	var result: Dictionary = await ApiClient.login(email, password)
+	# The password has done its job — don't keep it sitting in memory or the
+	# input box after authenticating.
+	password = ""
+	if is_instance_valid(_password_input):
+		_password_input.text = ""
 	if result.is_empty():
 		if is_inside_tree():
 			_account_status.text = "Invalid email or password"

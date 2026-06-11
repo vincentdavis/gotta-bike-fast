@@ -77,6 +77,14 @@ func login(email: String, password: String) -> Dictionary:
 	)
 	if result["ok"] and result["json"] is Dictionary:
 		_set_tokens_from_response(result["json"])
+		# Defense in depth: a display_name equal to the password is a leaked
+		# credential (historically a password manager autofilling the signup
+		# display-name field). Never let it surface in the UI — drop it so
+		# user_label() falls back to the email. The stored DB value is
+		# corrected on the web side; this guards the boot path in the meantime.
+		if not password.is_empty() and user_display_name == password:
+			user_display_name = ""
+			_save_auth()
 		return result["json"]
 	return {}
 
