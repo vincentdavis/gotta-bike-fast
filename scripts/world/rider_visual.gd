@@ -53,9 +53,6 @@ func _init(albedo: Color) -> void:
 	bibs.albedo_color = Belleville.INK
 	var skin := StandardMaterial3D.new()
 	skin.albedo_color = Color(0.85, 0.72, 0.56)
-	var helmet_mat := StandardMaterial3D.new()
-	helmet_mat.albedo_color = Belleville.OCHRE
-	helmet_mat.roughness = 1.0
 	var rubber := StandardMaterial3D.new()
 	rubber.albedo_color = Belleville.INK
 	rubber.roughness = 0.7
@@ -74,7 +71,7 @@ func _init(albedo: Color) -> void:
 	add_child(_upper)
 
 	var torso := _part(CapsuleMesh.new(), jersey, Vector3(0, 0.10, -0.10))
-	(torso.mesh as CapsuleMesh).radius = 0.14  # shrunken torso (caricature)
+	(torso.mesh as CapsuleMesh).radius = 0.13  # shrunken torso (caricature)
 	(torso.mesh as CapsuleMesh).height = 0.80
 	torso.rotation_degrees = Vector3(LEAN_DEG, 0, 0)
 	_upper.add_child(torso)
@@ -84,15 +81,38 @@ func _init(albedo: Color) -> void:
 	stripe.rotation_degrees = Vector3(LEAN_DEG, 0, 0)
 	_upper.add_child(stripe)
 
-	var head := _part(SphereMesh.new(), skin, Vector3(0, 0.67, -0.40))
-	(head.mesh as SphereMesh).radius = 0.12
-	(head.mesh as SphereMesh).height = 0.26
+	# Head thrust forward + low in the aero tuck, bridged to the shoulders by a
+	# short neck so it doesn't float.
+	var neck := _part(CylinderMesh.new(), skin, Vector3(0, 0.49, -0.34))
+	(neck.mesh as CylinderMesh).height = 0.16
+	(neck.mesh as CylinderMesh).top_radius = 0.05
+	(neck.mesh as CylinderMesh).bottom_radius = 0.058
+	neck.rotation_degrees = Vector3(-58, 0, 0)  # lean the neck forward to the head
+	_upper.add_child(neck)
+
+	var head := _part(SphereMesh.new(), skin, Vector3(0, 0.55, -0.44))
+	(head.mesh as SphereMesh).radius = 0.115
+	(head.mesh as SphereMesh).height = 0.25
 	_upper.add_child(head)
 
-	var helmet := _part(SphereMesh.new(), helmet_mat, Vector3(0, 0.75, -0.42))
-	(helmet.mesh as SphereMesh).radius = 0.14
-	(helmet.mesh as SphereMesh).height = 0.20
-	_upper.add_child(helmet)
+	# The Champion's signature head: a flat cycling cap (terracotta crown + a
+	# forward peak) instead of a helmet, and a long pointy nose poking forward.
+	var cap := _part(CylinderMesh.new(), accent, Vector3(0, 0.635, -0.43))
+	(cap.mesh as CylinderMesh).height = 0.05
+	(cap.mesh as CylinderMesh).top_radius = 0.11
+	(cap.mesh as CylinderMesh).bottom_radius = 0.125
+	_upper.add_child(cap)
+
+	var peak := _part(BoxMesh.new(), accent, Vector3(0, 0.615, -0.56))
+	(peak.mesh as BoxMesh).size = Vector3(0.17, 0.02, 0.14)
+	_upper.add_child(peak)
+
+	var nose := _part(CylinderMesh.new(), skin, Vector3(0, 0.545, -0.56))
+	(nose.mesh as CylinderMesh).top_radius = 0.0
+	(nose.mesh as CylinderMesh).bottom_radius = 0.04
+	(nose.mesh as CylinderMesh).height = 0.17
+	nose.rotation_degrees = Vector3(-90, 0, 0)  # tip points forward (-Z)
+	_upper.add_child(nose)
 
 	var arm_mesh := CapsuleMesh.new()
 	arm_mesh.radius = 0.055
@@ -102,30 +122,38 @@ func _init(albedo: Color) -> void:
 		arm.rotation_degrees = Vector3(-60.0, 0, 0)
 		_upper.add_child(arm)
 
-	# --- bike frame (static) ---
-	var frame := _part(CylinderMesh.new(), jersey, Vector3(0, 0.58, 0))
-	(frame.mesh as CylinderMesh).height = 1.05
-	(frame.mesh as CylinderMesh).top_radius = 0.035
-	(frame.mesh as CylinderMesh).bottom_radius = 0.035
-	frame.rotation_degrees = Vector3(90, 0, 0)
-	add_child(frame)
+	# --- bike: a clean diamond frame so the side profile reads as a real
+	# vintage road bike (open triangles, not one fat tube). Tubes are placed
+	# between the joints by _tube(): seat/down/top/head tubes form the main
+	# triangle, chain + seat stays the rear, plus the fork.
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = Belleville.INK.lerp(Belleville.UMBER, 0.25)  # dark vintage steel
+	steel.roughness = 1.0
+	var bb := Vector3(0, 0.36, 0.05)            # bottom bracket
+	var st_top := Vector3(0, 0.88, 0.14)        # seat tube top
+	var ht_top := Vector3(0, 0.86, -0.46)       # head tube top
+	var ht_bot := Vector3(0, 0.58, -0.49)       # head tube bottom / fork crown
+	var fh := Vector3(0, WHEEL_RADIUS, -0.55)   # front hub
+	var rh := Vector3(0, WHEEL_RADIUS, 0.55)    # rear hub
+	for seg in [
+		[bb, st_top], [bb, ht_bot], [st_top, ht_top], [ht_top, ht_bot],
+		[ht_bot, fh], [bb, rh], [st_top, rh],
+	]:
+		add_child(_tube(seg[0], seg[1], 0.022, steel))
 
-	var post := _part(CylinderMesh.new(), metal, Vector3(0, 0.78, 0.14))
-	(post.mesh as CylinderMesh).height = 0.36
-	(post.mesh as CylinderMesh).top_radius = 0.02
-	(post.mesh as CylinderMesh).bottom_radius = 0.02
-	add_child(post)
-
-	var saddle := _part(BoxMesh.new(), bibs, Vector3(0, 0.97, 0.16))
-	(saddle.mesh as BoxMesh).size = Vector3(0.12, 0.04, 0.26)
+	# Seatpost + saddle.
+	add_child(_tube(st_top, Vector3(0, 0.95, 0.155), 0.018, steel))
+	var saddle := _part(BoxMesh.new(), bibs, Vector3(0, 0.975, 0.16))
+	(saddle.mesh as BoxMesh).size = Vector3(0.10, 0.035, 0.24)
 	add_child(saddle)
 
-	var bars := _part(CylinderMesh.new(), bibs, Vector3(0, 0.92, -0.50))
-	(bars.mesh as CylinderMesh).height = 0.42
-	(bars.mesh as CylinderMesh).top_radius = 0.018
-	(bars.mesh as CylinderMesh).bottom_radius = 0.018
-	bars.rotation_degrees = Vector3(0, 0, 90)
-	add_child(bars)
+	# Vintage drop bars: a top grip across, drops hooking down + forward.
+	var bar_l := Vector3(-0.17, 0.93, -0.53)
+	var bar_r := Vector3(0.17, 0.93, -0.53)
+	add_child(_tube(ht_top, Vector3(0, 0.93, -0.53), 0.018, steel))    # stem
+	add_child(_tube(bar_l, bar_r, 0.016, bibs))                        # top bar
+	add_child(_tube(bar_l, Vector3(-0.17, 0.84, -0.60), 0.016, bibs))  # left drop
+	add_child(_tube(bar_r, Vector3(0.17, 0.84, -0.60), 0.016, bibs))   # right drop
 
 	# --- wheels: spinner pivots so spokes make the rotation visible ---
 	_front_spinner = _build_wheel(rubber, metal, Vector3(0, WHEEL_RADIUS, -0.55))
@@ -147,10 +175,10 @@ func _init(albedo: Color) -> void:
 	add_child(_pedal_r)
 
 	var thigh_mesh := CapsuleMesh.new()
-	thigh_mesh.radius = 0.13  # caricature: massive thighs
+	thigh_mesh.radius = 0.11  # strong thighs
 	thigh_mesh.height = 1.0  # unit length, stretched per frame
 	var shin_mesh := CapsuleMesh.new()
-	shin_mesh.radius = 0.115  # caricature: tree-trunk calves
+	shin_mesh.radius = 0.135  # the Champion's tree-trunk calves — the fattest part
 	shin_mesh.height = 1.0
 	_thigh_l = _part(thigh_mesh, bibs, Vector3.ZERO)
 	_thigh_r = _part(thigh_mesh, bibs, Vector3.ZERO)
@@ -173,15 +201,38 @@ func _part(mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	return inst
 
 
+func _tube(a: Vector3, b: Vector3, r: float, mat: Material) -> MeshInstance3D:
+	# A thin cylinder spanning a→b — for building the bike frame's tubes
+	# between joints (same unit-mesh basis trick _stretch uses for the legs).
+	var m := CylinderMesh.new()
+	m.top_radius = r
+	m.bottom_radius = r
+	m.height = 1.0
+	var inst := MeshInstance3D.new()
+	inst.mesh = m
+	inst.material_override = mat
+	var d := b - a
+	var l := maxf(d.length(), 0.0001)
+	var y := d / l
+	var ref_v := Vector3.RIGHT if absf(y.dot(Vector3.RIGHT)) < 0.95 else Vector3.FORWARD
+	var x := y.cross(ref_v).normalized()
+	var z := x.cross(y)
+	inst.basis = Basis(x, y * l, z)
+	inst.position = (a + b) * 0.5
+	return inst
+
+
 func _build_wheel(rubber: Material, metal: Material, at: Vector3) -> Node3D:
 	var spinner := Node3D.new()
 	spinner.position = at
 	add_child(spinner)
 
-	var tire := _part(CylinderMesh.new(), rubber, Vector3.ZERO)
-	(tire.mesh as CylinderMesh).height = 0.05
-	(tire.mesh as CylinderMesh).top_radius = WHEEL_RADIUS
-	(tire.mesh as CylinderMesh).bottom_radius = WHEEL_RADIUS
+	# Open ring (torus) not a solid disc — from the side you see through to the
+	# spokes (like the 2D wheels), and from behind it's still a thin tyre edge.
+	var tire := _part(TorusMesh.new(), rubber, Vector3.ZERO)
+	(tire.mesh as TorusMesh).inner_radius = WHEEL_RADIUS - 0.035
+	(tire.mesh as TorusMesh).outer_radius = WHEEL_RADIUS
+	(tire.mesh as TorusMesh).rings = 24
 	tire.rotation_degrees = Vector3(0, 0, 90)
 	spinner.add_child(tire)
 
