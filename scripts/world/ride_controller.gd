@@ -105,10 +105,14 @@ var _terrain_origin_y_m: float = 0.0
 var _terrain_min_ele: float = 0.0
 var _terrain_max_ele: float = 0.0
 
-# Topo minimap (in-ride). Loaded async; once present we project the rider
-# position into image UV every physics tick so the HUD marker tracks them.
-# Reuses the heightmap_* meta from the course (same origin / grid / extent).
-var _topo_loaded: bool = false
+# Minimap (in-ride). _minimap_kind: 0 = none, 1 = client-side fallback drawn
+# from the course path polyline, 2 = the server's hillshaded topo PNG (used
+# when it loads). Either way we project the rider into image UV every physics
+# tick so the HUD marker tracks them: topo reuses the heightmap_* meta, the
+# fallback uses _minimap_bounds (the path's x_m/y_m extent).
+var _minimap_kind: int = 0
+var _minimap_bounds: Dictionary = {}
+var _topo_loaded: bool = false  # mirrors _minimap_kind == 2 (kept for clarity)
 
 # Flat 12 km × 12 km ground plane used as a backdrop for synthetic / loop
 # courses. Tracked so we can hide it once the heightmap terrain arrives —
@@ -363,8 +367,13 @@ func _build_course_visuals() -> void:
 	# heightmap once it does.
 	if not str(current_course.get("heightmap_url", "")).is_empty():
 		_setup_terrain_async()
+	# Always draw a client-side fallback minimap from the course path so every
+	# ride shows a map immediately — even synthetic/loop courses and rides where
+	# the server never produced a topo PNG.
+	_setup_fallback_minimap()
 	# Async topo PNG fetch for the in-ride minimap. Independent of the
-	# heightmap fetch; either can fail without affecting the other.
+	# heightmap fetch; either can fail without affecting the other. When it
+	# lands it upgrades the fallback to the nicer hillshaded version.
 	if not str(current_course.get("topo_map_url", "")).is_empty():
 		_setup_minimap_async()
 
@@ -496,6 +505,98 @@ func _setup_minimap_async() -> void:
 		return
 	hud.set_minimap_texture(ImageTexture.create_from_image(img))
 	_topo_loaded = true
+	_minimap_kind = 2  # upgrade from the fallback to the hillshaded topo
+
+
+func _setup_fallback_minimap() -> void:
+	# Draw the course centerline into a small square texture and hand it to the
+	# HUD as a minimap. Uses the path's own x_m/y_m extent (no heightmap needed),
+	# so it works for every course — including synthetic/loop rides. The rider
+	# marker is projected with the same transform in _physics_process.
+	if _minimap_kind == 2:
+		return  # the nicer topo already loaded; don't downgrade
+	var pts: Array = _course_path
+	if pts.size() < 2:
+		return
+	var min_x := INF
+	var max_x := -INF
+	var min_y := INF
+	var max_y := -INF
+	for p in pts:
+		var x := float(p["x_m"])
+		var y := float(p["y_m"])
+		min_x = minf(min_x, x); max_x = maxf(max_x, x)
+		min_y = minf(min_y, y); max_y = maxf(max_y, y)
+	# Square + undistorted: fit the larger extent and centre the route.
+	var span := maxf(maxf(max_x - min_x, max_y - min_y), 1.0)
+	var size := 256
+	var pad := 20
+	_minimap_bounds = {
+		"cx": (min_x + max_x) * 0.5,
+		"cy": (min_y + max_y) * 0.5,
+		"span": span,
+		"size": size,
+		"pad": pad,
+		"inner": float(size - 2 * pad),
+	}
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	img.fill(Belleville.PAPER)
+	var px_pts := PackedVector2Array()
+	for p in pts:
+		var uv := _path_minimap_uv(float(p["x_m"]), float(p["y_m"]))
+		px_pts.append(Vector2(uv.x * float(size), uv.y * float(size)))
+	for i in range(1, px_pts.size()):
+		_draw_seg_on_image(img, px_pts[i - 1], px_pts[i], Belleville.INK, 3)
+	# Start (terracotta) + finish (teal) dots.
+	_stamp_disc(img, px_pts[0], Belleville.TERRACOTTA, 8)
+	_stamp_disc(img, px_pts[px_pts.size() - 1], Belleville.TEAL, 8)
+	hud.set_minimap_texture(ImageTexture.create_from_image(img))
+	_minimap_kind = 1
+
+
+func _path_minimap_uv(x_m: float, y_m: float) -> Vector2:
+	# Path frame (x_m east, y_m north) → texture UV, north at the top, matching
+	# how _setup_fallback_minimap drew the polyline. Clamped so a rider straying
+	# just past the path bounds still pins inside the map.
+	var b := _minimap_bounds
+	if b.is_empty():
+		return Vector2(0.5, 0.5)
+	var span: float = b["span"]
+	var half := span * 0.5
+	var cu := (x_m - (float(b["cx"]) - half)) / span
+	var cv := ((float(b["cy"]) + half) - y_m) / span
+	var size: float = float(b["size"])
+	var pad: float = float(b["pad"])
+	var inner: float = float(b["inner"])
+	var pxp := pad + clampf(cu, 0.0, 1.0) * inner
+	var pyp := pad + clampf(cv, 0.0, 1.0) * inner
+	return Vector2(pxp / size, pyp / size)
+
+
+func _draw_seg_on_image(img: Image, a: Vector2, b: Vector2, col: Color, thick: int) -> void:
+	var d := b - a
+	var steps := int(maxf(absf(d.x), absf(d.y)))
+	if steps <= 0:
+		_stamp_disc(img, a, col, thick)
+		return
+	for s in steps + 1:
+		_stamp_disc(img, a + d * (float(s) / float(steps)), col, thick)
+
+
+func _stamp_disc(img: Image, p: Vector2, col: Color, diameter: int) -> void:
+	var r := diameter / 2
+	var cx := int(round(p.x))
+	var cy := int(round(p.y))
+	var w := img.get_width()
+	var h := img.get_height()
+	for oy in range(-r, r + 1):
+		for ox in range(-r, r + 1):
+			if ox * ox + oy * oy > r * r:
+				continue
+			var xx := cx + ox
+			var yy := cy + oy
+			if xx >= 0 and yy >= 0 and xx < w and yy < h:
+				img.set_pixel(xx, yy, col)
 
 
 func _clear_existing_scenery() -> void:
@@ -1920,7 +2021,7 @@ func _physics_process(delta: float) -> void:
 	# Minimap rider marker. Project XZ → topo UV using the heightmap
 	# meta (the topo PNG covers the same area as the heightmap with
 	# row 0 = north). Only meaningful after the topo PNG has loaded.
-	if _topo_loaded and _terrain_grid_m > 0.0:
+	if _minimap_kind == 2 and _terrain_grid_m > 0.0:
 		var rp := rider_node.global_position
 		var world_w_m: float = float(_terrain_width) * _terrain_grid_m
 		var world_h_m: float = float(_terrain_height) * _terrain_grid_m
@@ -1929,6 +2030,11 @@ func _physics_process(delta: float) -> void:
 			var u: float = (rp.x - _terrain_origin_x_m) / world_w_m
 			var v: float = (max_y_m - (-rp.z)) / world_h_m
 			hud.set_minimap_uv(u, v)
+	elif _minimap_kind == 1:
+		# Fallback map: rider world (x, z) → path frame (x_m = x, y_m = -z) → UV.
+		var rp := rider_node.global_position
+		var uv := _path_minimap_uv(rp.x, -rp.z)
+		hud.set_minimap_uv(uv.x, uv.y)
 
 	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
 		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
