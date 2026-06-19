@@ -1693,8 +1693,18 @@ func _start_game() -> void:
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = false  # held in the pen until race_started
-	_is_solo_ride = false  # multiplayer races run at real time (Game Speed is Phase 2)
-	_game_speed = 1.0
+	_is_solo_ride = false
+	# Host-set race time-scale. Applied to keyboard (virtual) riders only — if
+	# this rider is on a power meter / trainer they race at real time (see
+	# _speed_allowed), so a measured effort is never distorted. Every client
+	# read the same game_speed off the game detail, so all virtual riders stay
+	# in sync.
+	_game_speed = GameSession.game_speed
+	if _game_speed > 1.0:
+		if _speed_allowed():
+			hud.show_toast("⏩ Virtual race · game speed %s" % _speed_label())
+		elif SensorBridge.using_sensor():
+			hud.show_toast("%s virtual race — your sensor stays at real time" % _speed_label())
 	hud.set_status("Get ready")
 
 
@@ -1811,10 +1821,14 @@ func _effective_game_speed() -> float:
 
 
 func _speed_allowed() -> bool:
-	# Game Speed is for solo, keyboard-controlled (virtual) rides only. The
-	# instant a real power meter / trainer is the power source, the ride snaps
-	# back to real time so a measured effort is never time-distorted.
-	return _is_solo_ride and not SensorBridge.using_sensor()
+	# Game Speed applies to keyboard (virtual) riders only — never when a real
+	# power meter / trainer is the source, so a measured effort is never
+	# time-distorted. Solo rides use the player's own setting; multiplayer races
+	# use the host's game_speed (>1 marks a virtual race), keeping all virtual
+	# riders in sync.
+	if SensorBridge.using_sensor():
+		return false
+	return _is_solo_ride or _game_speed > 1.0
 
 
 func _speed_label() -> String:
@@ -1823,8 +1837,11 @@ func _speed_label() -> String:
 
 
 func _nudge_game_speed(dir: int) -> void:
-	# In-ride [ / ] keys step through the speed presets. Only on solo + keyboard
-	# rides; otherwise tell the player why it's locked.
+	# In-ride [ / ] keys step through the speed presets — solo only. In a race
+	# the speed is fixed by the host so everyone stays in sync.
+	if not _is_solo_ride:
+		hud.show_toast("Game speed is set by the race host")
+		return
 	if not _speed_allowed():
 		hud.show_toast("Game speed: solo + keyboard only")
 		return

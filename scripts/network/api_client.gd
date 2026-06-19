@@ -415,12 +415,14 @@ func create_game(
 	course_id: String,
 	countdown_duration_s: int = 30,
 	scheduled_start_in_s: int = -1,
+	game_speed: float = 1.0,
 ) -> Dictionary:
 	var body: Dictionary = {
 		"host_rider_id": host_rider_id,
 		"host_display_name": host_display_name,
 		"course_id": course_id,
 		"countdown_duration_s": countdown_duration_s,
+		"game_speed": game_speed,
 	}
 	if scheduled_start_in_s > 0:
 		body["scheduled_start_in_s"] = scheduled_start_in_s

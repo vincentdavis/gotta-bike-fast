@@ -32,6 +32,9 @@ var state: String = ""  # mirrors backend Game.state
 var race_starts_at_unix_s: float = 0.0  # Unix epoch seconds (server clock)
 var scheduled_start_at_unix_s: float = 0.0  # 0 = no schedule (manual start)
 var is_solo: bool = false
+# Host-set race time-scale (1.0 = real time). Read from the game detail on
+# create/join; applied client-side in the ride, gated to keyboard riders.
+var game_speed: float = 1.0
 
 # Dev-menu return target. Set by whatever screen opens the dev menu so
 # the menu's Back button can return there. The dev menu clears this on
@@ -115,6 +118,7 @@ func reset() -> void:
 	race_starts_at_unix_s = 0.0
 	scheduled_start_at_unix_s = 0.0
 	is_solo = false
+	game_speed = 1.0
 
 
 func is_host() -> bool:

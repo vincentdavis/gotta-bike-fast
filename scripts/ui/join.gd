@@ -131,6 +131,7 @@ func _join_with_code(raw: String) -> void:
 	GameSession.scheduled_start_at_unix_s = GameSession.parse_iso_to_unix(
 		str(game.get("scheduled_start_at", ""))
 	)
+	GameSession.game_speed = float(game.get("game_speed", 1.0))
 	GameSession.is_solo = false
 	_polling = false
 	get_tree().change_scene_to_file("res://scenes/lobby.tscn")

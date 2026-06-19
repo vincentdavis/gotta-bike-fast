@@ -853,6 +853,12 @@ func _on_create_pressed() -> void:
 	var start_opt: Dictionary = await cd_picker.pick()
 	cd_picker.queue_free()
 
+	# Race time-scale — defaults to the host's own Game Speed setting.
+	var speed_picker := GameSpeedPicker.new()
+	add_child(speed_picker)
+	var race_speed: float = await speed_picker.pick(GraphicsSettings.game_speed)
+	speed_picker.queue_free()
+
 	_set_ride_busy(true, "Creating game…")
 	var game: Dictionary = await ApiClient.create_game(
 		GameSession.rider_id,
@@ -860,6 +866,7 @@ func _on_create_pressed() -> void:
 		str(chosen["id"]),
 		int(start_opt.get("countdown_duration_s", 30)),
 		int(start_opt.get("scheduled_start_in_s", -1)),
+		race_speed,
 	)
 	if game.is_empty():
 		_set_ride_busy(false, "Failed to create game")
@@ -877,6 +884,7 @@ func _on_create_pressed() -> void:
 	GameSession.scheduled_start_at_unix_s = GameSession.parse_iso_to_unix(
 		str(game.get("scheduled_start_at", ""))
 	)
+	GameSession.game_speed = float(game.get("game_speed", 1.0))
 	GameSession.is_solo = false
 	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
 

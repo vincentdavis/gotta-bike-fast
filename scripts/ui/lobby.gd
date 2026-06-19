@@ -15,6 +15,12 @@ func _ready() -> void:
 		GameSession.course.get("name", "?"),
 		float(GameSession.course.get("length_m", 0.0)) / 1000.0,
 	]
+	if GameSession.game_speed > 1.0:
+		# Flag a virtual fast race so riders know before the gun (and trainer
+		# riders know they'll be at real time).
+		course_label.text += "  ·  ⏩ %s virtual" % (
+			("%.1f×" % GameSession.game_speed).replace(".0×", "×")
+		)
 	share_url.text = "gbf://join/%s" % GameSession.code
 	_render_participants(GameSession.participants)
 
