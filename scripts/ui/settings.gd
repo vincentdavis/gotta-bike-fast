@@ -18,6 +18,7 @@ extends Control
 @onready var hud_opacity_label: Label = $Margin/Scroll/VBox/HudOpacityLabel
 @onready var hud_opacity_slider: HSlider = $Margin/Scroll/VBox/HudOpacitySlider
 @onready var hud_text_picker: ColorPickerButton = $Margin/Scroll/VBox/HudTextColorPicker
+@onready var game_speed_option: OptionButton = $Margin/Scroll/VBox/GameSpeedOption
 @onready var music_input: HSlider = $Margin/Scroll/VBox/MusicInput
 @onready var sfx_input: HSlider = $Margin/Scroll/VBox/SFXInput
 @onready var status_label: Label = $Margin/Scroll/VBox/StatusLabel
@@ -90,6 +91,33 @@ func _setup_graphics_controls() -> void:
 	hud_text_picker.color_changed.connect(
 		func(c: Color) -> void: GraphicsSettings.set_hud_text_color(c)
 	)
+
+	# Game speed (Gameplay) — a solo/keyboard time-scale; presets from
+	# GraphicsSettings. Applies on the next ride (and live via [ / ] in a ride).
+	for i in GraphicsSettings.GAME_SPEED_PRESETS.size():
+		game_speed_option.add_item(_game_speed_item_text(GraphicsSettings.GAME_SPEED_PRESETS[i]), i)
+	game_speed_option.select(_game_speed_index(GraphicsSettings.game_speed))
+	game_speed_option.item_selected.connect(
+		func(idx: int) -> void:
+			GraphicsSettings.set_game_speed(GraphicsSettings.GAME_SPEED_PRESETS[idx])
+	)
+
+
+func _game_speed_item_text(s: float) -> String:
+	var label := ("%.1f×" % s).replace(".0×", "×")
+	return "%s  (real time)" % label if s <= 1.0 else label
+
+
+func _game_speed_index(value: float) -> int:
+	var presets: Array = GraphicsSettings.GAME_SPEED_PRESETS
+	var idx := 0
+	var best := INF
+	for i in presets.size():
+		var d: float = absf(float(presets[i]) - value)
+		if d < best:
+			best = d
+			idx = i
+	return idx
 
 
 func _on_hud_opacity_changed(value: float) -> void:

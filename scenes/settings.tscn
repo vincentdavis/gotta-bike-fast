@@ -191,6 +191,28 @@ theme_override_font_sizes/font_size = 13
 autowrap_mode = 2
 modulate = Color(0.75, 0.75, 0.75, 1)
 
+[node name="SectionGameplay" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Gameplay"
+theme_override_font_sizes/font_size = 22
+
+[node name="GameSpeedLabel" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Game speed"
+theme_override_font_sizes/font_size = 16
+
+[node name="GameSpeedOption" type="OptionButton" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(220, 0)
+theme_override_font_sizes/font_size = 18
+
+[node name="GameSpeedHint" type="Label" parent="Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Runs time faster on solo, keyboard-only rides so a long course takes less real time. Ignored when a power meter or trainer is connected. During a ride: [ and ] to change."
+theme_override_font_sizes/font_size = 13
+autowrap_mode = 2
+modulate = Color(0.75, 0.75, 0.75, 1)
+
 [node name="SectionAudio" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
 text = "Audio (placeholder)"

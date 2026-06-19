@@ -45,6 +45,17 @@ var hud_bg_color: Color = DEFAULT_HUD_BG
 var hud_bg_opacity: float = DEFAULT_HUD_OPACITY
 var hud_text_color: Color = DEFAULT_HUD_TEXT
 
+# Game speed — a time-scale multiplier for the ride simulation so a long
+# virtual course can be ridden in less wall-clock time. It only takes effect on
+# solo, keyboard-controlled (virtual) rides; the ride force-locks it to 1× the
+# instant a real power meter / trainer is the power source, so it can never
+# distort a measured effort. Persisted; the ride reads it at start and the
+# in-ride [ / ] keys nudge it live.
+const GAME_SPEED_PRESETS: Array[float] = [1.0, 1.5, 2.0, 3.0, 4.0]
+const DEFAULT_GAME_SPEED := 1.0
+const MAX_GAME_SPEED := 4.0
+var game_speed: float = DEFAULT_GAME_SPEED
+
 var _fps_layer: CanvasLayer = null
 var _fps_label: Label = null
 var _fps_accum: float = 0.0
@@ -84,6 +95,13 @@ func set_fullscreen(value: bool) -> void:
 func set_show_fps(value: bool) -> void:
 	show_fps = value
 	_apply_fps_overlay()
+	_save()
+
+
+func set_game_speed(value: float) -> void:
+	# Stored, not applied here — the ride reads game_speed at start and gates it
+	# (solo + keyboard only).
+	game_speed = clampf(value, 1.0, MAX_GAME_SPEED)
 	_save()
 
 
@@ -266,6 +284,7 @@ func _load() -> void:
 	hud_bg_color = cfg.get_value("hud", "bg_color", DEFAULT_HUD_BG)
 	hud_bg_opacity = clampf(float(cfg.get_value("hud", "bg_opacity", DEFAULT_HUD_OPACITY)), 0.0, 1.0)
 	hud_text_color = cfg.get_value("hud", "text_color", DEFAULT_HUD_TEXT)
+	game_speed = clampf(float(cfg.get_value("gameplay", "game_speed", DEFAULT_GAME_SPEED)), 1.0, MAX_GAME_SPEED)
 
 
 func _save() -> void:
@@ -278,4 +297,5 @@ func _save() -> void:
 	cfg.set_value("hud", "bg_color", hud_bg_color)
 	cfg.set_value("hud", "bg_opacity", hud_bg_opacity)
 	cfg.set_value("hud", "text_color", hud_text_color)
+	cfg.set_value("gameplay", "game_speed", game_speed)
 	cfg.save(FILE)

@@ -49,7 +49,15 @@ func _process(delta: float) -> void:
 func show_camera(view_name: String) -> void:
 	if view_name.is_empty():
 		return
-	camera_label.text = "📷  %s" % view_name
+	show_toast("📷  %s" % view_name)
+
+
+func show_toast(text: String) -> void:
+	# Transient corner toast (reuses the camera-toast label + fade timer) for
+	# brief notices like camera changes and game-speed nudges.
+	if text.is_empty():
+		return
+	camera_label.text = text
 	camera_label.modulate.a = 1.0
 	_camera_toast_t = CAMERA_TOAST_S
 

@@ -45,6 +45,8 @@ var current_course: Dictionary = {}
 
 var is_riding: bool = false
 var is_racing: bool = false  # false during the pre-race pen (game mode only)
+var _is_solo_ride: bool = false  # solo vs. multiplayer game — gates Game Speed
+var _game_speed: float = 1.0     # ride time-scale (GraphicsSettings.game_speed)
 var _finishing: bool = false
 var target_power_w: float = STARTING_POWER_W
 var velocity_mps: float = 0.0
@@ -1619,6 +1621,10 @@ func _start_solo() -> void:
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = true  # solo starts racing immediately
+	_is_solo_ride = true
+	_game_speed = GraphicsSettings.game_speed
+	if _game_speed > 1.0 and _speed_allowed():
+		hud.show_toast("⏩ Game speed %s" % _speed_label())
 	hud.set_status("Go!")
 	await get_tree().create_timer(1.2).timeout
 	if is_riding:
@@ -1687,6 +1693,8 @@ func _start_game() -> void:
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = false  # held in the pen until race_started
+	_is_solo_ride = false  # multiplayer races run at real time (Game Speed is Phase 2)
+	_game_speed = 1.0
 	hud.set_status("Get ready")
 
 
@@ -1792,6 +1800,46 @@ func _input(event: InputEvent) -> void:
 			# rebuilt every frame in _physics_process from the tangent,
 			# so we just flip the heading state here.
 			heading = -heading
+		elif event.keycode == KEY_BRACKETRIGHT:
+			_nudge_game_speed(1)
+		elif event.keycode == KEY_BRACKETLEFT:
+			_nudge_game_speed(-1)
+
+
+func _effective_game_speed() -> float:
+	return _game_speed if _speed_allowed() else 1.0
+
+
+func _speed_allowed() -> bool:
+	# Game Speed is for solo, keyboard-controlled (virtual) rides only. The
+	# instant a real power meter / trainer is the power source, the ride snaps
+	# back to real time so a measured effort is never time-distorted.
+	return _is_solo_ride and not SensorBridge.using_sensor()
+
+
+func _speed_label() -> String:
+	# 2.0 → "2×", 1.5 → "1.5×".
+	return ("%.1f×" % _game_speed).replace(".0×", "×")
+
+
+func _nudge_game_speed(dir: int) -> void:
+	# In-ride [ / ] keys step through the speed presets. Only on solo + keyboard
+	# rides; otherwise tell the player why it's locked.
+	if not _speed_allowed():
+		hud.show_toast("Game speed: solo + keyboard only")
+		return
+	var presets: Array = GraphicsSettings.GAME_SPEED_PRESETS
+	var idx := 0
+	var best := INF
+	for i in presets.size():
+		var d: float = absf(float(presets[i]) - _game_speed)
+		if d < best:
+			best = d
+			idx = i
+	idx = clampi(idx + dir, 0, presets.size() - 1)
+	_game_speed = float(presets[idx])
+	GraphicsSettings.set_game_speed(_game_speed)  # persist as the new default
+	hud.show_toast("⏩ Game speed %s" % _speed_label())
 
 
 func _handle_camera_key(event: InputEventKey) -> bool:
@@ -1899,14 +1947,18 @@ func _physics_process(delta: float) -> void:
 	var raw_grade := _gradient_at_distance(distance_m)
 	var gradient := raw_grade * float(heading) if is_racing else 0.0
 	var draft_mult := _compute_draft_multiplier()
+	# Game Speed: scale the simulation clock so a virtual ride advances faster
+	# than real time. Gated to solo + keyboard (see _speed_allowed); networking,
+	# telemetry cadence, and steering below stay on the real delta.
+	var sim_delta := delta * _effective_game_speed()
 	if is_racing:
 		velocity_mps = CyclingPhysics.step_velocity(
-			target_power_w, velocity_mps, gradient, kit, delta, draft_mult
+			target_power_w, velocity_mps, gradient, kit, sim_delta, draft_mult
 		)
 		if velocity_mps > peak_speed_mps:
 			peak_speed_mps = velocity_mps
-		distance_m += velocity_mps * delta * float(heading)
-		elapsed_s += delta
+		distance_m += velocity_mps * sim_delta * float(heading)
+		elapsed_s += sim_delta
 	else:
 		# Pen: bike is held; even with power applied no real forward speed.
 		velocity_mps = 0.0
@@ -2001,7 +2053,7 @@ func _physics_process(delta: float) -> void:
 
 	# Animate the player's rig: wheels from road speed, legs/cranks from
 	# cadence (real sensor cadence when fresh), torso sway from power.
-	_player_visual.animate(delta, velocity_mps, _animation_cadence(), target_power_w)
+	_player_visual.animate(sim_delta, velocity_mps, _animation_cadence(), target_power_w)
 
 	var sensor_power: bool = SensorBridge.using_sensor() and SensorBridge.has_fresh_power()
 	hud.set_power(target_power_w, sensor_power)
