@@ -3,11 +3,16 @@ extends Control
 # Unified home page. Everything that used to be split across the landing
 # page, login, rider picker, and main menu now lives here as tabs:
 #
-#   Ride    — Solo / Create / Join (needs auth + a selected rider)
-#   Rider   — pick which rider to ride as (needs auth)
-#   Garage  — view the selected rider's equipped loadout (read-only)
-#   Account — signed-in user + logout, or an inline login form
-#   System  — server status + recheck, dev menu, settings
+#   Ride     — Solo / Create / Join (needs auth + a selected rider)
+#   Riders   — pick which rider to ride as (needs auth)
+#   Garage   — view the selected rider's equipped loadout (read-only)
+#   Account  — signed-in user + logout, or an inline login form
+#   Settings — game preferences (embeds settings.tscn)
+#   Status   — server status + recheck (was "System")
+#   Dev      — dev / staging URL overrides (embeds dev_menu.tscn)
+#
+# Settings and Dev embed their existing scenes as tab content; their now-
+# redundant Back buttons are hidden.
 #
 # UI is constructed in code (same approach as course_picker.gd) rather
 # than a .tscn — the page is highly dynamic (login-vs-signed-in swap,
@@ -15,17 +20,18 @@ extends Control
 # brittle scene file.
 #
 # Tab gating:
-#   System  — always enabled (you need it to fix server URLs when down)
-#   Account — always enabled (you need it to log in)
-#   Rider   — enabled when authenticated
-#   Garage  — enabled when authenticated AND a rider is selected
-#   Ride    — enabled when authenticated AND a rider is selected
+#   Account / Settings / Status / Dev — always enabled
+#   Riders — enabled when authenticated
+#   Garage — enabled when authenticated AND a rider is selected
+#   Ride   — enabled when authenticated AND a rider is selected
 
 const TAB_RIDE := 0
-const TAB_RIDER := 1
+const TAB_RIDERS := 1
 const TAB_GARAGE := 2
 const TAB_ACCOUNT := 3
-const TAB_SYSTEM := 4
+const TAB_SETTINGS := 4
+const TAB_STATUS := 5
+const TAB_DEV := 6
 
 const DOT_OK := Color(0.30, 0.78, 0.40, 1.0)
 const DOT_OFFLINE := Color(0.85, 0.28, 0.28, 1.0)
@@ -57,7 +63,8 @@ var _email_input: LineEdit
 var _password_input: LineEdit
 var _account_status: Label
 
-# System tab
+# Status tab
+var _env_label: Label
 var _fastapi_dot: ColorRect
 var _fastapi_url_label: Label
 var _fastapi_status_label: Label
@@ -137,7 +144,11 @@ func _build_ui() -> void:
 	_tabs.add_child(_build_rider_tab())
 	_tabs.add_child(_build_garage_tab())
 	_tabs.add_child(_build_account_tab())
-	_tabs.add_child(_build_system_tab())
+	_tabs.add_child(_build_settings_tab())
+	_tabs.add_child(_build_status_tab())
+	_tabs.add_child(_build_dev_tab())
+	# Keep the Status tab fresh when opened (env/URLs may change in the Dev tab).
+	_tabs.tab_changed.connect(_on_tab_changed)
 
 
 func _build_ride_tab() -> Control:
@@ -190,7 +201,7 @@ func _build_ride_tab() -> Control:
 
 func _build_rider_tab() -> Control:
 	var root := VBoxContainer.new()
-	root.name = "Rider"
+	root.name = "Riders"
 	root.add_theme_constant_override("separation", 10)
 
 	var scroll := ScrollContainer.new()
@@ -254,22 +265,23 @@ func _build_account_tab() -> Control:
 	return _account_root
 
 
-func _build_system_tab() -> Control:
+func _build_status_tab() -> Control:
 	var root := VBoxContainer.new()
-	root.name = "System"
+	root.name = "Status"
 	root.add_theme_constant_override("separation", 14)
 
 	var pad := Control.new()
 	pad.custom_minimum_size = Vector2(0, 8)
 	root.add_child(pad)
 
-	# Active environment (LOCAL / ALPHA_1 / CUSTOM). Change it in the Dev
-	# menu; the label reflects the current DevSettings selection.
-	var env_label := Label.new()
-	env_label.text = "Environment: %s" % DevSettings.environment
-	env_label.add_theme_font_size_override("font_size", 16)
-	env_label.modulate = Color(0.8, 0.85, 0.95)
-	root.add_child(env_label)
+	# Active environment (LOCAL / ALPHA_1 / CUSTOM). Change it in the Dev tab;
+	# the label reflects the current DevSettings selection (refreshed whenever
+	# this tab is opened, see _on_tab_changed).
+	_env_label = Label.new()
+	_env_label.text = "Environment: %s" % DevSettings.environment
+	_env_label.add_theme_font_size_override("font_size", 16)
+	_env_label.modulate = Color(0.8, 0.85, 0.95)
+	root.add_child(_env_label)
 
 	# Game server (FastAPI) row.
 	var fa := _status_row("Game server")
@@ -287,29 +299,32 @@ func _build_system_tab() -> Control:
 	web["recheck"].pressed.connect(func() -> void: ApiClient.ping_web())
 	root.add_child(web["row"])
 
-	var sep := HSeparator.new()
-	root.add_child(sep)
-
-	var links := HBoxContainer.new()
-	links.add_theme_constant_override("separation", 12)
-	root.add_child(links)
-
-	var settings_btn := Button.new()
-	settings_btn.text = "Settings"
-	settings_btn.pressed.connect(_open_settings)
-	links.add_child(settings_btn)
-
-	var dev_btn := Button.new()
-	dev_btn.text = "Dev menu"
-	dev_btn.flat = true
-	dev_btn.pressed.connect(_open_dev_menu)
-	links.add_child(dev_btn)
-
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(spacer)
 
 	return root
+
+
+func _build_settings_tab() -> Control:
+	# Embed the standalone Settings screen as a tab. Its Back button is
+	# meaningless here (the tab bar is the navigation), so hide it.
+	var inst: Control = load("res://scenes/settings.tscn").instantiate()
+	inst.name = "Settings"
+	var back := inst.get_node_or_null("Margin/Scroll/VBox/ButtonRow/BackButton")
+	if back != null:
+		back.visible = false
+	return inst
+
+
+func _build_dev_tab() -> Control:
+	# Embed the Dev menu as a tab; hide its now-redundant Back button.
+	var inst: Control = load("res://scenes/dev_menu.tscn").instantiate()
+	inst.name = "Dev"
+	var back := inst.get_node_or_null("Margin/VBox/ButtonRow/BackButton")
+	if back != null:
+		back.visible = false
+	return inst
 
 
 # --- Small UI builders ---
@@ -373,9 +388,9 @@ func _apply_auth_state() -> void:
 	var ready_to_ride := authed and has_rider
 
 	_tabs.set_tab_disabled(TAB_RIDE, not ready_to_ride)
-	_tabs.set_tab_disabled(TAB_RIDER, not authed)
+	_tabs.set_tab_disabled(TAB_RIDERS, not authed)
 	_tabs.set_tab_disabled(TAB_GARAGE, not ready_to_ride)
-	# Account + System always enabled.
+	# Account, Settings, Status, Dev always enabled.
 
 	_update_header_identity()
 	_rebuild_account_tab()
@@ -385,7 +400,7 @@ func _apply_auth_state() -> void:
 	if not authed:
 		_tabs.current_tab = TAB_ACCOUNT
 	elif not has_rider:
-		_tabs.current_tab = TAB_RIDER
+		_tabs.current_tab = TAB_RIDERS
 	else:
 		_tabs.current_tab = TAB_RIDE
 
@@ -551,6 +566,22 @@ func _load_riders() -> void:
 		return
 	_rider_status.text = ""
 	_render_riders(riders)
+	_maybe_auto_select_rider(riders)
+
+
+func _maybe_auto_select_rider(riders: Array) -> void:
+	# Land the player on the Ride tab: when nothing is selected yet (a fresh
+	# launch), auto-pick a rider. Prefer the default "Got A Ride", else the
+	# first in the list. _select_rider unlocks Ride/Garage and switches to the
+	# Ride tab, so the menu opens ready to ride.
+	if GameSession.has_rider() or riders.is_empty():
+		return
+	var pick: Dictionary = riders[0]
+	for r in riders:
+		if str(r.get("display_name", "")) == "Got A Ride":
+			pick = r
+			break
+	_select_rider(pick)
 
 
 func _render_riders(riders: Array) -> void:
@@ -805,13 +836,14 @@ func _open_account_web() -> void:
 	await ApiClient.open_web_link("/accounts/account/")
 
 
-func _open_settings() -> void:
-	get_tree().change_scene_to_file("res://scenes/settings.tscn")
-
-
-func _open_dev_menu() -> void:
-	GameSession.dev_menu_return_scene = "res://scenes/main.tscn"
-	get_tree().change_scene_to_file("res://scenes/dev_menu.tscn")
+func _on_tab_changed(tab: int) -> void:
+	# The Dev tab can change the environment / server URLs in place; refresh the
+	# Status tab's environment label + server dots whenever it's opened so they
+	# don't show stale values.
+	if tab == TAB_STATUS:
+		if _env_label != null:
+			_env_label.text = "Environment: %s" % DevSettings.environment
+		_refresh_status()
 
 
 # --- Ride tab handlers ---
