@@ -49,11 +49,11 @@ var hud_text_color: Color = DEFAULT_HUD_TEXT
 # virtual course can be ridden in less wall-clock time. It only takes effect on
 # solo, keyboard-controlled (virtual) rides; the ride force-locks it to 1× the
 # instant a real power meter / trainer is the power source, so it can never
-# distort a measured effort. Persisted; the ride reads it at start and the
-# in-ride [ / ] keys nudge it live.
-const GAME_SPEED_PRESETS: Array[float] = [1.0, 1.5, 2.0, 3.0, 4.0]
-const DEFAULT_GAME_SPEED := 1.0
-const MAX_GAME_SPEED := 4.0
+# distort a measured effort. Persisted; the ride reads it once at start — it
+# can't be changed mid-ride.
+const GAME_SPEED_PRESETS: Array[float] = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+const DEFAULT_GAME_SPEED := 6.0
+const MAX_GAME_SPEED := 10.0
 var game_speed: float = DEFAULT_GAME_SPEED
 
 var _fps_layer: CanvasLayer = null

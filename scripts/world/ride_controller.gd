@@ -1810,10 +1810,6 @@ func _input(event: InputEvent) -> void:
 			# rebuilt every frame in _physics_process from the tangent,
 			# so we just flip the heading state here.
 			heading = -heading
-		elif event.keycode == KEY_BRACKETRIGHT:
-			_nudge_game_speed(1)
-		elif event.keycode == KEY_BRACKETLEFT:
-			_nudge_game_speed(-1)
 
 
 func _effective_game_speed() -> float:
@@ -1834,29 +1830,6 @@ func _speed_allowed() -> bool:
 func _speed_label() -> String:
 	# 2.0 → "2×", 1.5 → "1.5×".
 	return ("%.1f×" % _game_speed).replace(".0×", "×")
-
-
-func _nudge_game_speed(dir: int) -> void:
-	# In-ride [ / ] keys step through the speed presets — solo only. In a race
-	# the speed is fixed by the host so everyone stays in sync.
-	if not _is_solo_ride:
-		hud.show_toast("Game speed is set by the race host")
-		return
-	if not _speed_allowed():
-		hud.show_toast("Game speed: solo + keyboard only")
-		return
-	var presets: Array = GraphicsSettings.GAME_SPEED_PRESETS
-	var idx := 0
-	var best := INF
-	for i in presets.size():
-		var d: float = absf(float(presets[i]) - _game_speed)
-		if d < best:
-			best = d
-			idx = i
-	idx = clampi(idx + dir, 0, presets.size() - 1)
-	_game_speed = float(presets[idx])
-	GraphicsSettings.set_game_speed(_game_speed)  # persist as the new default
-	hud.show_toast("⏩ Game speed %s" % _speed_label())
 
 
 func _handle_camera_key(event: InputEventKey) -> bool:

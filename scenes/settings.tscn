@@ -208,7 +208,7 @@ theme_override_font_sizes/font_size = 18
 
 [node name="GameSpeedHint" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
-text = "Runs time faster on solo, keyboard-only rides so a long course takes less real time. Ignored when a power meter or trainer is connected. During a ride: [ and ] to change."
+text = "Runs time faster on solo, keyboard-only rides so a long course takes less real time. Ignored when a power meter or trainer is connected. Set before you start — it can't change mid-ride."
 theme_override_font_sizes/font_size = 13
 autowrap_mode = 2
 modulate = Color(0.75, 0.75, 0.75, 1)

@@ -11,11 +11,12 @@ signal _picked(speed: float)
 
 # [label, multiplier]
 const OPTIONS: Array = [
-	["1× · real time (default)", 1.0],
-	["1.5× · brisk", 1.5],
-	["2× · fast", 2.0],
-	["3× · very fast", 3.0],
-	["4× · time-lapse", 4.0],
+	["1× · real time", 1.0],
+	["2× · brisk", 2.0],
+	["4× · fast", 4.0],
+	["6× · very fast", 6.0],
+	["8× · faster", 8.0],
+	["10× · time-lapse", 10.0],
 ]
 
 
