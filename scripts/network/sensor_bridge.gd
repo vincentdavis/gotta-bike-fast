@@ -41,6 +41,9 @@ const RECONNECT_INTERVAL_S := 4.0
 
 var bridge_url: String = DEFAULT_URL
 var power_source: int = PowerSource.KEYBOARD
+# True in a browser (HTML5/WASM) build: there is no local BLE bridge to spawn
+# or reach, so the build is keyboard-only and every connection path is a no-op.
+var web_build: bool = false
 
 # Trainer control. trainer_available is true once a connected device exposes
 # the FTMS Control Point. Mode + ERG target persist across sessions.
@@ -75,7 +78,13 @@ var _bridge_pid: int = -1
 
 
 func _ready() -> void:
+	web_build = OS.has_feature("web")
 	_load()
+	if web_build:
+		# Keyboard-only in the browser: force keyboard power and never open a
+		# WS connection or spawn a bridge.
+		power_source = PowerSource.KEYBOARD
+		return
 	# If the player left the source on SENSOR last session, start the bridge
 	# connection now so measured power is ready when they enter a ride.
 	if power_source == PowerSource.SENSOR:
@@ -91,6 +100,8 @@ func is_bridge_connected() -> bool:
 func ensure_connected() -> void:
 	# Ask the autoload to maintain a connection to the bridge (used by the
 	# Sensors screen and when SENSOR is selected). Safe to call repeatedly.
+	if web_build:
+		return  # keyboard-only web build — there's no local bridge to reach
 	_want_connected = true
 	_maybe_spawn_bridge()
 	if _peer == null:
@@ -107,6 +118,8 @@ func stop() -> void:
 
 
 func set_power_source(source: int) -> void:
+	if web_build:
+		return  # locked to keyboard in the web build
 	if source == power_source:
 		return
 	power_source = source
@@ -254,6 +267,8 @@ func _maybe_spawn_bridge() -> void:
 	# Launch the bundled bridge once per session. No-op in the editor or when
 	# the binary isn't present (dev), so a manually-run bridge is never
 	# disturbed; a second instance would just fail to bind and exit anyway.
+	if web_build:
+		return  # no local processes in a browser sandbox
 	if _spawn_attempted:
 		return
 	var path := _bridge_binary_path()

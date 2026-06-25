@@ -1,0 +1,12 @@
+# Keep the Docker build context lean — only the Godot project sources are
+# needed to export the Web build.
+.git
+.github
+build/
+.godot/
+bridge/
+tools/
+android/
+*.md
+export_credentials.cfg
+.DS_Store

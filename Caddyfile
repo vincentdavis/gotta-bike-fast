@@ -1,0 +1,20 @@
+{
+	admin off
+	# Railway terminates TLS at its edge; serve plain HTTP on $PORT internally.
+	auto_https off
+}
+
+:{$PORT} {
+	root * /srv
+	# Serve the precompressed *.gz (wasm/pck/js) when the client accepts gzip.
+	file_server {
+		precompressed gzip
+	}
+	# WebAssembly must carry Content-Type: application/wasm (even gzip-encoded)
+	# so the browser can stream-compile it.
+	@wasm path *.wasm
+	header @wasm Content-Type application/wasm
+	# Short cache: assets aren't content-hashed, so a redeploy should show up
+	# soon without forcing a re-download every visit.
+	header Cache-Control "public, max-age=3600"
+}

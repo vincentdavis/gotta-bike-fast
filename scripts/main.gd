@@ -173,11 +173,17 @@ func _build_ride_tab() -> Control:
 	root.add_child(_join_button)
 
 	# Power source / sensor pairing. Shows the current source and opens the
-	# Sensors screen. Always available — keyboard is the default.
+	# Sensors screen. Always available — keyboard is the default. The web build
+	# is keyboard-only (no BLE bridge in the browser), so it shows a disabled
+	# note instead of opening the pairing screen.
 	_sensors_button = Button.new()
-	_sensors_button.text = _power_source_text()
+	if OS.has_feature("web"):
+		_sensors_button.text = "Power source: Keyboard (web build)"
+		_sensors_button.disabled = true
+	else:
+		_sensors_button.text = _power_source_text()
+		_sensors_button.pressed.connect(_on_sensors_pressed)
 	_sensors_button.add_theme_font_size_override("font_size", 16)
-	_sensors_button.pressed.connect(_on_sensors_pressed)
 	root.add_child(_sensors_button)
 
 	_ride_status = Label.new()
