@@ -24,6 +24,11 @@ func _ready() -> void:
 	share_url.text = "gbf://join/%s" % GameSession.code
 	_render_participants(GameSession.participants)
 
+	# Copy-link affordance: an icon button (this font has no emoji, so use an
+	# imported SVG glyph) sitting right beside the link.
+	copy_button.icon = load("res://branding/copy_icon.svg")
+	copy_button.text = ""
+	copy_button.tooltip_text = "Copy invite link"
 	copy_button.pressed.connect(_on_copy_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	leave_button.pressed.connect(_on_leave_pressed)
@@ -116,8 +121,21 @@ func _on_race_ended(reason: String) -> void:
 
 
 func _on_copy_pressed() -> void:
-	DisplayServer.clipboard_set(share_url.text)
-	status_label.text = "Copied!"
+	var link := share_url.text
+	DisplayServer.clipboard_set(link)
+	if OS.has_feature("web"):
+		# Godot's clipboard_set is unreliable in the browser, so also write via
+		# the JS Clipboard API. A button press is a valid user gesture and the
+		# hosted page is HTTPS (a secure context), so this is allowed.
+		JavaScriptBridge.eval(
+			"navigator.clipboard && navigator.clipboard.writeText(%s)" % JSON.stringify(link),
+			true,
+		)
+	status_label.text = "Link copied"
+	copy_button.modulate = Color(0.55, 1.0, 0.65)  # brief green flash for feedback
+	await get_tree().create_timer(1.0).timeout
+	if is_instance_valid(copy_button):
+		copy_button.modulate = Color.WHITE
 
 
 func _on_start_pressed() -> void:
