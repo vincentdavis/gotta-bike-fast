@@ -14,7 +14,7 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-color = Color(0.08, 0.10, 0.14, 1)
+color = Color(0, 0, 0, 0)
 
 [node name="Margin" type="MarginContainer" parent="."]
 layout_mode = 1
@@ -39,7 +39,7 @@ theme_override_font_sizes/font_size = 36
 layout_mode = 2
 text = "Service URLs the client talks to. Persisted to user://dev_settings.cfg."
 theme_override_font_sizes/font_size = 14
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="EnvRow" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2

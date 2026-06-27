@@ -14,7 +14,7 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-color = Color(0.08, 0.10, 0.14, 1)
+color = Color(0, 0, 0, 0)
 
 [node name="Margin" type="MarginContainer" parent="."]
 layout_mode = 1
@@ -58,7 +58,7 @@ theme_override_font_sizes/font_size = 18
 layout_mode = 2
 text = "Edit riders and garage in the web app."
 theme_override_font_sizes/font_size = 14
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="ManageRidersButton" type="Button" parent="Margin/Scroll/VBox"]
 layout_mode = 2
@@ -100,7 +100,7 @@ theme_override_font_sizes/font_size = 18
 layout_mode = 2
 text = "Applies when the next ride starts. Low turns off reflections, fog, and ambient shadows."
 theme_override_font_sizes/font_size = 13
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="ScaleLabel" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
@@ -119,7 +119,7 @@ value = 1.0
 layout_mode = 2
 text = "Below 100% the 3D scene renders smaller and is upscaled with FSR 2 — big speedup on 4K displays."
 theme_override_font_sizes/font_size = 13
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="FrameLabel" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
@@ -145,7 +145,7 @@ theme_override_font_sizes/font_size = 16
 layout_mode = 2
 text = "Graphics settings apply immediately and are saved on this device."
 theme_override_font_sizes/font_size = 13
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="SectionHud" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
@@ -189,7 +189,7 @@ layout_mode = 2
 text = "Background + text colour for the stats, leaderboard, and map. Applies on the next ride."
 theme_override_font_sizes/font_size = 13
 autowrap_mode = 2
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="SectionGameplay" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2
@@ -211,7 +211,7 @@ layout_mode = 2
 text = "Runs time faster on solo, keyboard-only rides so a long course takes less real time. Ignored when a power meter or trainer is connected. Set before you start — it can't change mid-ride."
 theme_override_font_sizes/font_size = 13
 autowrap_mode = 2
-modulate = Color(0.75, 0.75, 0.75, 1)
+modulate = Color(1, 1, 1, 0.6)
 
 [node name="SectionAudio" type="Label" parent="Margin/Scroll/VBox"]
 layout_mode = 2

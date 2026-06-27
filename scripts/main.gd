@@ -33,9 +33,10 @@ const TAB_SETTINGS := 4
 const TAB_STATUS := 5
 const TAB_DEV := 6
 
-const DOT_OK := Color(0.30, 0.78, 0.40, 1.0)
-const DOT_OFFLINE := Color(0.85, 0.28, 0.28, 1.0)
-const DOT_CONNECTING := Color(0.95, 0.75, 0.25, 1.0)
+# Belleville status palette (olive / burnt-red / mustard) to match the web.
+const DOT_OK := Color("6f7a4e")
+const DOT_OFFLINE := Color("8c4a33")
+const DOT_CONNECTING := Color("9c7b3e")
 
 var _busy: bool = false
 
@@ -101,9 +102,11 @@ func _fetch_user_async() -> void:
 
 func _build_ui() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Belleville theme (aged paper + ink + terracotta) to match the website.
+	theme = MenuTheme.build()
 
 	var bg := ColorRect.new()
-	bg.color = Color(0.07, 0.09, 0.13, 1.0)
+	bg.color = MenuTheme.PAGE
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
@@ -213,6 +216,7 @@ func _build_ride_tab() -> Control:
 	var games_link := Button.new()
 	games_link.text = "Set up / invite to races (web) →"
 	games_link.flat = true
+	MenuTheme.link_button_style(games_link)
 	games_link.add_theme_font_size_override("font_size", 14)
 	games_link.pressed.connect(_open_games_web)
 	root.add_child(games_link)
@@ -237,7 +241,7 @@ func _build_rider_tab() -> Control:
 
 	_rider_status = Label.new()
 	_rider_status.add_theme_font_size_override("font_size", 14)
-	_rider_status.modulate = Color(0.75, 0.78, 0.85)
+	_rider_status.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	root.add_child(_rider_status)
 
 	var button_row := HBoxContainer.new()
@@ -252,6 +256,7 @@ func _build_rider_tab() -> Control:
 	var manage := Button.new()
 	manage.text = "Manage riders (web) →"
 	manage.flat = true
+	MenuTheme.link_button_style(manage)
 	manage.pressed.connect(_open_riders_web)
 	button_row.add_child(manage)
 
@@ -271,6 +276,7 @@ func _build_garage_tab() -> Control:
 	var manage := Button.new()
 	manage.text = "Manage garage (web) →"
 	manage.flat = true
+	MenuTheme.link_button_style(manage)
 	manage.pressed.connect(_open_garage_web)
 	root.add_child(manage)
 
@@ -301,7 +307,7 @@ func _build_status_tab() -> Control:
 	_env_label = Label.new()
 	_env_label.text = "Environment: %s" % DevSettings.environment
 	_env_label.add_theme_font_size_override("font_size", 16)
-	_env_label.modulate = Color(0.8, 0.85, 0.95)
+	_env_label.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	root.add_child(_env_label)
 
 	# Game server (FastAPI) row.
@@ -355,6 +361,7 @@ func _big_button(text: String) -> Button:
 	b.text = text
 	b.add_theme_font_size_override("font_size", 22)
 	b.custom_minimum_size = Vector2(0, 56)
+	MenuTheme.primary_button_style(b)
 	return b
 
 
@@ -380,7 +387,7 @@ func _status_row(title: String) -> Dictionary:
 
 	var url_lbl := Label.new()
 	url_lbl.add_theme_font_size_override("font_size", 12)
-	url_lbl.modulate = Color(0.6, 0.65, 0.75)
+	url_lbl.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	text_box.add_child(url_lbl)
 
 	var status_lbl := Label.new()
@@ -432,7 +439,7 @@ func _update_header_identity() -> void:
 		_header_identity.add_theme_color_override("font_color", DOT_OK)
 	else:
 		_header_identity.text = "● not signed in"
-		_header_identity.add_theme_color_override("font_color", Color(0.6, 0.62, 0.7))
+		_header_identity.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 
 
 # --- Account tab (login ⇆ signed-in) ---
@@ -461,7 +468,7 @@ func _build_signed_in_view() -> void:
 		var email := Label.new()
 		email.text = ApiClient.user_email
 		email.add_theme_font_size_override("font_size", 14)
-		email.modulate = Color(0.7, 0.74, 0.82)
+		email.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 		_account_root.add_child(email)
 
 	var button_row := HBoxContainer.new()
@@ -471,6 +478,7 @@ func _build_signed_in_view() -> void:
 	var manage := Button.new()
 	manage.text = "Manage account (web) →"
 	manage.flat = true
+	MenuTheme.link_button_style(manage)
 	manage.pressed.connect(_open_account_web)
 	button_row.add_child(manage)
 
@@ -507,24 +515,27 @@ func _build_login_form() -> void:
 	var submit := Button.new()
 	submit.text = "Sign in"
 	submit.add_theme_font_size_override("font_size", 18)
+	MenuTheme.primary_button_style(submit)
 	submit.pressed.connect(_on_login_submit)
 	button_row.add_child(submit)
 
 	var signup := Button.new()
 	signup.text = "Sign up (web) →"
 	signup.flat = true
+	MenuTheme.link_button_style(signup)
 	signup.pressed.connect(func() -> void: OS.shell_open(ApiClient.web_signup_url()))
 	button_row.add_child(signup)
 
 	var reset := Button.new()
 	reset.text = "Forgot password (web) →"
 	reset.flat = true
+	MenuTheme.link_button_style(reset)
 	reset.pressed.connect(func() -> void: OS.shell_open(ApiClient.web_password_reset_url()))
 	button_row.add_child(reset)
 
 	_account_status = Label.new()
 	_account_status.add_theme_font_size_override("font_size", 14)
-	_account_status.modulate = Color(0.85, 0.6, 0.6)
+	_account_status.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	_account_root.add_child(_account_status)
 
 
@@ -612,7 +623,7 @@ func _render_riders(riders: Array) -> void:
 		var empty := Label.new()
 		empty.text = "No riders yet — create one with “Manage riders (web)”."
 		empty.add_theme_font_size_override("font_size", 16)
-		empty.modulate = Color(0.8, 0.8, 0.85)
+		empty.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_rider_list.add_child(empty)
 		return
@@ -657,7 +668,7 @@ func _build_rider_row(rider: Dictionary) -> PanelContainer:
 	var loadout := Label.new()
 	loadout.text = _rider_loadout_line(rider)
 	loadout.add_theme_font_size_override("font_size", 13)
-	loadout.modulate = Color(0.75, 0.78, 0.85)
+	loadout.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	info.add_child(loadout)
 
 	var is_active := str(rider.get("id", "")) == GameSession.rider_id
@@ -741,7 +752,7 @@ func _render_garage() -> void:
 		var hint := Label.new()
 		hint.text = "Select a rider on the Rider tab to see its loadout."
 		hint.add_theme_font_size_override("font_size", 16)
-		hint.modulate = Color(0.8, 0.8, 0.85)
+		hint.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 		_garage_root.add_child(hint)
 		return
 
@@ -781,7 +792,7 @@ func _garage_row(slot: String, item: Dictionary, keys: Array, units: Array) -> P
 	slot_lbl.text = slot
 	slot_lbl.add_theme_font_size_override("font_size", 16)
 	slot_lbl.custom_minimum_size = Vector2(80, 0)
-	slot_lbl.modulate = Color(0.7, 0.74, 0.82)
+	slot_lbl.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	hbox.add_child(slot_lbl)
 
 	var info := VBoxContainer.new()
@@ -791,7 +802,7 @@ func _garage_row(slot: String, item: Dictionary, keys: Array, units: Array) -> P
 	var name_lbl := Label.new()
 	if item.is_empty():
 		name_lbl.text = "(stock)"
-		name_lbl.modulate = Color(0.7, 0.7, 0.75)
+		name_lbl.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	else:
 		var brand := str(item.get("brand", ""))
 		var nm := str(item.get("name", "?"))
@@ -809,7 +820,7 @@ func _garage_row(slot: String, item: Dictionary, keys: Array, units: Array) -> P
 			var spec := Label.new()
 			spec.text = " · ".join(bits)
 			spec.add_theme_font_size_override("font_size", 13)
-			spec.modulate = Color(0.72, 0.75, 0.82)
+			spec.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 			info.add_child(spec)
 
 	return panel
@@ -926,7 +937,7 @@ func _render_my_races(races: Array) -> void:
 		var empty := Label.new()
 		empty.text = "No races to enter. Create or join one on the web (Races), then Refresh."
 		empty.add_theme_font_size_override("font_size", 15)
-		empty.modulate = Color(0.8, 0.8, 0.85)
+		empty.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_races_list.add_child(empty)
 		return
@@ -964,7 +975,7 @@ func _build_race_row(race: Dictionary) -> PanelContainer:
 		str(race.get("state", "")),
 	]
 	meta.add_theme_font_size_override("font_size", 14)
-	meta.modulate = Color(0.75, 0.78, 0.85)
+	meta.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
 	info.add_child(meta)
 
 	var enter_btn := Button.new()
