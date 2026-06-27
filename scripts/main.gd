@@ -76,6 +76,9 @@ var _web_status_label: Label
 
 func _ready() -> void:
 	_build_ui()
+	# Scale the menu UI up for readability (user-set, live-updated).
+	_apply_ui_scale()
+	GraphicsSettings.ui_scale_changed.connect(_on_ui_scale_changed)
 	# Wipe stale game state from a prior session, keep the picked rider.
 	GameSession.reset()
 	ApiClient.connection_status_changed.connect(_on_connection_status_changed)
@@ -96,6 +99,26 @@ func _fetch_user_async() -> void:
 	if is_inside_tree():
 		_update_header_identity()
 		_rebuild_account_tab()
+
+
+func _apply_ui_scale() -> void:
+	var w := get_window()
+	if w != null:
+		w.content_scale_factor = GraphicsSettings.ui_scale
+
+
+func _on_ui_scale_changed(value: float) -> void:
+	var w := get_window()
+	if w != null:
+		w.content_scale_factor = value
+
+
+func _exit_tree() -> void:
+	# Don't carry the menu's larger UI scale into the ride / lobby — their HUDs
+	# are laid out at 1.0.
+	var w := get_window()
+	if w != null:
+		w.content_scale_factor = 1.0
 
 
 # --- UI construction ---

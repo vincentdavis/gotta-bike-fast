@@ -56,6 +56,13 @@ const DEFAULT_GAME_SPEED := 6.0
 const MAX_GAME_SPEED := 10.0
 var game_speed: float = DEFAULT_GAME_SPEED
 
+# Menu UI scale — multiplies the window content_scale_factor for the menu so its
+# text + controls are larger / more readable. Applied by main.gd and reset to
+# 1.0 when leaving the menu so the 3D ride HUD keeps its own layout.
+const UI_SCALE_PRESETS: Array[float] = [1.0, 1.2, 1.4, 1.6]
+const DEFAULT_UI_SCALE := 1.2
+var ui_scale: float = DEFAULT_UI_SCALE
+
 var _fps_layer: CanvasLayer = null
 var _fps_label: Label = null
 var _fps_accum: float = 0.0
@@ -103,6 +110,14 @@ func set_game_speed(value: float) -> void:
 	# (solo + keyboard only).
 	game_speed = clampf(value, 1.0, MAX_GAME_SPEED)
 	_save()
+
+
+signal ui_scale_changed(value: float)
+
+func set_ui_scale(value: float) -> void:
+	ui_scale = clampf(value, 1.0, 2.0)
+	_save()
+	ui_scale_changed.emit(ui_scale)
 
 
 # HUD appearance setters — saved immediately; applied when the next ride's HUD
@@ -285,6 +300,7 @@ func _load() -> void:
 	hud_bg_opacity = clampf(float(cfg.get_value("hud", "bg_opacity", DEFAULT_HUD_OPACITY)), 0.0, 1.0)
 	hud_text_color = cfg.get_value("hud", "text_color", DEFAULT_HUD_TEXT)
 	game_speed = clampf(float(cfg.get_value("gameplay", "game_speed", DEFAULT_GAME_SPEED)), 1.0, MAX_GAME_SPEED)
+	ui_scale = clampf(float(cfg.get_value("ui", "scale", DEFAULT_UI_SCALE)), 1.0, 2.0)
 
 
 func _save() -> void:
@@ -298,4 +314,5 @@ func _save() -> void:
 	cfg.set_value("hud", "bg_opacity", hud_bg_opacity)
 	cfg.set_value("hud", "text_color", hud_text_color)
 	cfg.set_value("gameplay", "game_speed", game_speed)
+	cfg.set_value("ui", "scale", ui_scale)
 	cfg.save(FILE)

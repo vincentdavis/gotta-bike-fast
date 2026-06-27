@@ -32,6 +32,8 @@ func _ready() -> void:
 	units_option.add_item("Metric", 0)
 	units_option.add_item("Imperial", 1)
 
+	_setup_ui_scale_control()
+
 	manage_riders_button.pressed.connect(_on_manage_riders)
 	save_button.pressed.connect(_on_save)
 	back_button.pressed.connect(_on_back)
@@ -39,6 +41,41 @@ func _ready() -> void:
 	_setup_graphics_controls()
 	_render_rider_summary()
 	_load_user()
+
+
+# Menu UI size — built in code so it sits next to Units. Live-applied via
+# GraphicsSettings (main.gd rescales the window), saved immediately.
+func _setup_ui_scale_control() -> void:
+	var vbox := units_option.get_parent()
+	var label := Label.new()
+	label.text = "Menu size"
+	var opt := OptionButton.new()
+	var names := ["Normal", "Large", "Larger", "Largest"]
+	var presets := GraphicsSettings.UI_SCALE_PRESETS
+	for i in presets.size():
+		var nm: String = names[i] if i < names.size() else "Scale"
+		opt.add_item("%s (%d%%)" % [nm, int(round(presets[i] * 100.0))], i)
+	opt.select(_ui_scale_index(GraphicsSettings.ui_scale))
+	opt.item_selected.connect(
+		func(idx: int) -> void: GraphicsSettings.set_ui_scale(GraphicsSettings.UI_SCALE_PRESETS[idx])
+	)
+	vbox.add_child(label)
+	vbox.add_child(opt)
+	var after := units_option.get_index()
+	vbox.move_child(label, after + 1)
+	vbox.move_child(opt, after + 2)
+
+
+func _ui_scale_index(value: float) -> int:
+	var presets := GraphicsSettings.UI_SCALE_PRESETS
+	var best := 0
+	var best_d := 1e9
+	for i in presets.size():
+		var d: float = absf(presets[i] - value)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
 
 
 # --- Graphics (device-local; applied + saved immediately, no Save needed) ---
