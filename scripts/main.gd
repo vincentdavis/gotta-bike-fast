@@ -44,10 +44,10 @@ var _header_identity: Label
 
 # Ride tab
 var _solo_button: Button
-var _create_button: Button
-var _join_button: Button
 var _sensors_button: Button
 var _ride_status: Label
+var _races_list: VBoxContainer
+var _races_refresh_button: Button
 
 # Rider tab
 var _rider_list: VBoxContainer
@@ -164,13 +164,28 @@ func _build_ride_tab() -> Control:
 	_solo_button.pressed.connect(_on_solo_pressed)
 	root.add_child(_solo_button)
 
-	_create_button = _big_button("Create Game")
-	_create_button.pressed.connect(_on_create_pressed)
-	root.add_child(_create_button)
+	# My races — races are now created, joined, and invited on the web (Races).
+	# Here we list the ones this rider is in and Enter them.
+	var races_header := Label.new()
+	races_header.text = "My races"
+	races_header.add_theme_font_size_override("font_size", 20)
+	root.add_child(races_header)
 
-	_join_button = _big_button("Join Game")
-	_join_button.pressed.connect(_on_join_pressed)
-	root.add_child(_join_button)
+	var races_scroll := ScrollContainer.new()
+	races_scroll.custom_minimum_size = Vector2(0, 200)
+	races_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(races_scroll)
+
+	_races_list = VBoxContainer.new()
+	_races_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_races_list.add_theme_constant_override("separation", 8)
+	races_scroll.add_child(_races_list)
+
+	_races_refresh_button = Button.new()
+	_races_refresh_button.text = "Refresh races"
+	_races_refresh_button.add_theme_font_size_override("font_size", 16)
+	_races_refresh_button.pressed.connect(_load_my_races)
+	root.add_child(_races_refresh_button)
 
 	# Power source / sensor pairing. Shows the current source and opens the
 	# Sensors screen. Always available — keyboard is the default. The web build
@@ -196,7 +211,7 @@ func _build_ride_tab() -> Control:
 	root.add_child(spacer)
 
 	var games_link := Button.new()
-	games_link.text = "My Games (web) →"
+	games_link.text = "Set up / invite to races (web) →"
 	games_link.flat = true
 	games_link.add_theme_font_size_override("font_size", 14)
 	games_link.pressed.connect(_open_games_web)
@@ -691,7 +706,12 @@ func _select_rider(rider: Dictionary) -> void:
 	_render_garage()
 	_tabs.set_tab_disabled(TAB_RIDE, false)
 	_tabs.set_tab_disabled(TAB_GARAGE, false)
+	# Switching to Ride fires tab_changed → _load_my_races(); only load
+	# explicitly when we're already on Ride (no tab_changed, so no load).
+	var was_on_ride := _tabs.current_tab == TAB_RIDE
 	_tabs.current_tab = TAB_RIDE
+	if was_on_ride:
+		_load_my_races()
 
 
 func _render_riders_from_cache_marker() -> void:
@@ -850,6 +870,9 @@ func _on_tab_changed(tab: int) -> void:
 		if _env_label != null:
 			_env_label.text = "Environment: %s" % DevSettings.environment
 		_refresh_status()
+	elif tab == TAB_RIDE and GameSession.has_rider():
+		# Refresh the My-races list whenever the Ride tab is opened.
+		_load_my_races()
 
 
 # --- Ride tab handlers ---
@@ -857,8 +880,8 @@ func _on_tab_changed(tab: int) -> void:
 func _set_ride_busy(busy: bool, message: String = "") -> void:
 	_busy = busy
 	_solo_button.disabled = busy
-	_create_button.disabled = busy
-	_join_button.disabled = busy
+	if _races_refresh_button != null:
+		_races_refresh_button.disabled = busy
 	_ride_status.text = message
 
 
@@ -869,47 +892,111 @@ func _on_solo_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/ride.tscn")
 
 
-func _on_create_pressed() -> void:
-	if _busy:
+func _load_my_races() -> void:
+	# The rider's races (hosted + joined), set up on the web. Lists only the
+	# ones still enterable.
+	if not GameSession.has_rider():
+		_render_my_races([])
 		return
-	_set_ride_busy(true, "Loading courses…")
-	var courses: Array = await ApiClient.list_courses()
-	if courses.is_empty():
-		_set_ride_busy(false, "No courses available")
+	_ride_status.text = "Loading races…"
+	if _races_refresh_button != null:
+		_races_refresh_button.disabled = true
+	var races: Array = await ApiClient.list_my_games(GameSession.rider_id)
+	if _races_refresh_button != null:
+		_races_refresh_button.disabled = false
+	if not is_inside_tree():
 		return
+	_ride_status.text = ""
+	_render_my_races(races)
 
-	var picker := CoursePicker.new()
-	add_child(picker)
-	var chosen: Dictionary = await picker.pick(courses)
-	picker.queue_free()
-	if chosen.is_empty():
-		_set_ride_busy(false, "")
+
+func _render_my_races(races: Array) -> void:
+	for child in _races_list.get_children():
+		child.queue_free()
+	# by-rider returns the rider's whole history; only show races you can still
+	# enter. LOBBY only: you gather in the lobby and it transitions to the ride
+	# when the host/schedule starts the countdown. (Once a race has left the
+	# lobby the countdown broadcast has already fired, so entering then would
+	# strand you waiting — late entry into a live race is a separate feature.)
+	var enterable: Array = []
+	for r in races:
+		if str(r.get("state", "")) == "LOBBY":
+			enterable.append(r)
+	if enterable.is_empty():
+		var empty := Label.new()
+		empty.text = "No races to enter. Create or join one on the web (Races), then Refresh."
+		empty.add_theme_font_size_override("font_size", 15)
+		empty.modulate = Color(0.8, 0.8, 0.85)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_races_list.add_child(empty)
 		return
+	for r in enterable:
+		_races_list.add_child(_build_race_row(r))
 
-	var cd_picker := CountdownPicker.new()
-	add_child(cd_picker)
-	var start_opt: Dictionary = await cd_picker.pick()
-	cd_picker.queue_free()
 
-	# Race time-scale — defaults to the host's own Game Speed setting.
-	var speed_picker := GameSpeedPicker.new()
-	add_child(speed_picker)
-	var race_speed: float = await speed_picker.pick(GraphicsSettings.game_speed)
-	speed_picker.queue_free()
+func _build_race_row(race: Dictionary) -> PanelContainer:
+	var panel := PanelContainer.new()
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
 
-	_set_ride_busy(true, "Creating game…")
-	var game: Dictionary = await ApiClient.create_game(
-		GameSession.rider_id,
-		GameSession.rider_display_name,
-		str(chosen["id"]),
-		int(start_opt.get("countdown_duration_s", 30)),
-		int(start_opt.get("scheduled_start_in_s", -1)),
-		race_speed,
-	)
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 14)
+	margin.add_child(hbox)
+
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(info)
+
+	var name_lbl := Label.new()
+	var host_tag := "  (host)" if bool(race.get("is_host", false)) else ""
+	name_lbl.text = "%s%s" % [str(race.get("course_name", "Race")), host_tag]
+	name_lbl.add_theme_font_size_override("font_size", 19)
+	info.add_child(name_lbl)
+
+	var meta := Label.new()
+	meta.text = "%d riders · code %s · %s" % [
+		int(race.get("participant_count", 0)),
+		str(race.get("code", "")),
+		str(race.get("state", "")),
+	]
+	meta.add_theme_font_size_override("font_size", 14)
+	meta.modulate = Color(0.75, 0.78, 0.85)
+	info.add_child(meta)
+
+	var enter_btn := Button.new()
+	enter_btn.text = "Enter"
+	enter_btn.add_theme_font_size_override("font_size", 16)
+	enter_btn.custom_minimum_size = Vector2(120, 0)
+	var captured := str(race.get("code", ""))
+	enter_btn.pressed.connect(func() -> void: _on_enter_pressed(captured))
+	hbox.add_child(enter_btn)
+
+	return panel
+
+
+func _on_enter_pressed(code: String) -> void:
+	# Already a participant (joined on the web) — just load the detail, populate
+	# GameSession, and drop into the lobby. No join call.
+	if _busy or code.is_empty():
+		return
+	_set_ride_busy(true, "Entering %s…" % code)
+	var game: Dictionary = await ApiClient.get_game(code)
+	if not is_inside_tree():
+		return
 	if game.is_empty():
-		_set_ride_busy(false, "Failed to create game")
+		_set_ride_busy(false, "Could not load %s" % code)
 		return
-
+	if str(game.get("state", "")) != "LOBBY":
+		# It left the lobby between listing and Enter — the countdown broadcast
+		# has already fired, so entering now would strand us in the lobby.
+		# Refuse and refresh so the stale row drops off the list.
+		_set_ride_busy(false, "%s already started — you can't enter now." % code)
+		_load_my_races()
+		return
 	GameSession.code = str(game["code"])
 	GameSession.host_rider_id = str(game["host_rider_id"])
 	GameSession.course = {
@@ -925,12 +1012,6 @@ func _on_create_pressed() -> void:
 	GameSession.game_speed = float(game.get("game_speed", 1.0))
 	GameSession.is_solo = false
 	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
-
-
-func _on_join_pressed() -> void:
-	if _busy:
-		return
-	get_tree().change_scene_to_file("res://scenes/join.tscn")
 
 
 func _power_source_text() -> String:
