@@ -34,6 +34,11 @@ func connect_to_game(code: String, rider_id: String, ride_id: String = "") -> vo
 	var url := "%s/ws/game/%s?rider_id=%s" % [ws_url, code, rider_id]
 	if not ride_id.is_empty():
 		url += "&ride_id=" + ride_id
+	# Authenticate the connection: the relay verifies this token's rider claim.
+	# A JWT is URL-safe (only [A-Za-z0-9_-] and '.'), so no escaping is needed.
+	var token := ApiClient.get_access_token()
+	if not token.is_empty():
+		url += "&token=" + token
 	var err := _peer.connect_to_url(url)
 	if err != OK:
 		push_warning("WorldClient: connect failed err=%s url=%s" % [err, url])

@@ -71,6 +71,13 @@ func is_authenticated() -> bool:
 	return not _access_token.is_empty()
 
 
+func get_access_token() -> String:
+	# Exposed so the WebSocket client can authenticate its connection (the game
+	# relay verifies this token's rider claim). Browsers can't set an
+	# Authorization header on a WS, so it travels in the connect URL.
+	return _access_token
+
+
 func login(email: String, password: String) -> Dictionary:
 	var result: Dictionary = await _do_request(
 		"POST", "/api/auth/login", {"email": email, "password": password}, web_url
