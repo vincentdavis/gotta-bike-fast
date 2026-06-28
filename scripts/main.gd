@@ -85,6 +85,14 @@ func _ready() -> void:
 	ApiClient.auth_expired.connect(_on_auth_expired)
 	_refresh_status()
 	_apply_auth_state()
+
+	# Web "Join Race" deep link (/?ticket=…&race=CODE): sign in via the one-time
+	# ticket and drop straight into that race. Owns the post-auth flow itself.
+	var deep_link := _read_web_deep_link()
+	if not str(deep_link.get("race", "")).is_empty():
+		_handle_join_deep_link(deep_link)
+		return
+
 	if ApiClient.is_authenticated():
 		_load_riders()
 		# Always refresh the profile on boot: the header + auth.cfg cache
@@ -99,6 +107,73 @@ func _fetch_user_async() -> void:
 	if is_inside_tree():
 		_update_header_identity()
 		_rebuild_account_tab()
+
+
+func _read_web_deep_link() -> Dictionary:
+	# Parse ?key=value pairs from the browser URL (web build only).
+	if not OS.has_feature("web"):
+		return {}
+	var search := str(JavaScriptBridge.eval("window.location.search"))
+	var out := {}
+	if search.begins_with("?"):
+		search = search.substr(1)
+	for pair in search.split("&", false):
+		var kv := pair.split("=", true, 1)
+		if not kv[0].is_empty():
+			out[kv[0].uri_decode()] = kv[1].uri_decode() if kv.size() == 2 else ""
+	return out
+
+
+func _clear_web_query() -> void:
+	# Drop ?ticket/?race so a reload doesn't re-run the deep link (the ticket is
+	# one-time anyway and would just 410).
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.history.replaceState({}, '', window.location.pathname)")
+
+
+func _handle_join_deep_link(deep_link: Dictionary) -> void:
+	var code := str(deep_link.get("race", "")).strip_edges().to_upper()
+	var ticket := str(deep_link.get("ticket", ""))
+	_clear_web_query()
+
+	# 1. Sign in via the one-time ticket (if the website provided one).
+	if not ticket.is_empty():
+		await ApiClient.exchange_ticket(ticket)
+		if not is_inside_tree():
+			return
+
+	_apply_auth_state()
+	if not ApiClient.is_authenticated():
+		_load_riders()  # couldn't sign in — fall back to the normal menu
+		return
+	_fetch_user_async()
+
+	# 2. Find which of the user's riders is in this race, then enter as them.
+	var riders: Array = await ApiClient.list_riders()
+	if not is_inside_tree():
+		return
+	var game: Dictionary = await ApiClient.get_game(code)
+	if not is_inside_tree():
+		return
+	var chosen := {}
+	if not game.is_empty():
+		var participant_ids := {}
+		for p in game.get("participants", []):
+			participant_ids[str(p.get("rider_id", ""))] = true
+		for r in riders:
+			if participant_ids.has(str(r.get("id", ""))):
+				chosen = r
+				break
+
+	if chosen.is_empty():
+		# Not a participant (or the race is gone) — land in the menu instead.
+		_load_riders()
+		if not game.is_empty():
+			_ride_status.text = "Join %s on the web first, then Enter from My races." % code
+		return
+
+	GameSession.set_rider(chosen)
+	_on_enter_pressed(code)
 
 
 func _apply_ui_scale() -> void:

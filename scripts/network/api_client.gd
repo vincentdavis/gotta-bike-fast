@@ -96,6 +96,20 @@ func login(email: String, password: String) -> Dictionary:
 	return {}
 
 
+func exchange_ticket(ticket: String) -> bool:
+	# Web "Join Race" deep link: the website minted a one-time ticket for the
+	# logged-in user; trade it for a JWT pair so the browser game is signed in.
+	if ticket.is_empty():
+		return false
+	var result: Dictionary = await _do_request(
+		"POST", "/api/auth/exchange-ticket", {"ticket": ticket}, web_url
+	)
+	if result["ok"] and result["json"] is Dictionary:
+		_set_tokens_from_response(result["json"])
+		return true
+	return false
+
+
 func web_signup_url() -> String:
 	return web_url + "/accounts/signup/"
 
