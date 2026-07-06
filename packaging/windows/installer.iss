@@ -3,10 +3,12 @@
 ; stages both executables into dist_pkg/app/ before running ISCC.
 
 [Setup]
-AppName=Gotta Bike Fast
+AppName=GOTTA.BIKE: Virtual
 AppVersion=0.1.0
 AppPublisher=vdavis
 DefaultDirName={autopf}\GottaBikeFast
+; A colon can't appear in a Start-menu folder path, so keep {group} colon-free.
+DefaultGroupName=GOTTA.BIKE Virtual
 DisableProgramGroupPage=yes
 OutputDir=..\..\dist_pkg
 OutputBaseFilename=GottaBikeFast-Setup
@@ -21,11 +23,11 @@ Source: "..\..\dist_pkg\app\GottaBikeFast.exe"; DestDir: "{app}"; Flags: ignorev
 Source: "..\..\dist_pkg\app\gbf-bridge.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Gotta Bike Fast"; Filename: "{app}\GottaBikeFast.exe"
-Name: "{autodesktop}\Gotta Bike Fast"; Filename: "{app}\GottaBikeFast.exe"; Tasks: desktopicon
+Name: "{group}\GOTTA.BIKE Virtual"; Filename: "{app}\GottaBikeFast.exe"
+Name: "{autodesktop}\GOTTA.BIKE Virtual"; Filename: "{app}\GottaBikeFast.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\GottaBikeFast.exe"; Description: "Launch Gotta Bike Fast"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\GottaBikeFast.exe"; Description: "Launch GOTTA.BIKE: Virtual"; Flags: nowait postinstall skipifsilent

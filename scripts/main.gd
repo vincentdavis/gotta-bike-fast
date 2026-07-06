@@ -33,6 +33,10 @@ const TAB_SETTINGS := 4
 const TAB_STATUS := 5
 const TAB_DEV := 6
 
+# Display name (branding). The internal app id (project config/name) stays
+# GOTTA_BIKE_FAST so the user:// save dir / cached login don't move.
+const GAME_NAME := "GOTTA.BIKE: Virtual"
+
 # Belleville status palette (olive / burnt-red / mustard) to match the web.
 const DOT_OK := Color("6f7a4e")
 const DOT_OFFLINE := Color("8c4a33")
@@ -75,6 +79,10 @@ var _web_status_label: Label
 
 
 func _ready() -> void:
+	# Window / browser-tab title (also updates document.title on the web build).
+	var w := get_window()
+	if w != null:
+		w.title = GAME_NAME
 	_build_ui()
 	# Scale the menu UI up for readability (user-set, live-updated).
 	_apply_ui_scale()
@@ -225,7 +233,7 @@ func _build_ui() -> void:
 	root.add_child(header)
 
 	var title := Label.new()
-	title.text = "GOTTA BIKE FAST"
+	title.text = GAME_NAME
 	title.add_theme_font_size_override("font_size", 30)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
