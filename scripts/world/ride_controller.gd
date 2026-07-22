@@ -1693,6 +1693,10 @@ func _start_game() -> void:
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = false  # held in the pen until race_started
+	if GameSession.state == "RACING":
+		# Late entry / rejoin: the gun fired before we connected, so no
+		# race_started broadcast is coming — release the pen immediately.
+		is_racing = true
 	_is_solo_ride = false
 	# Host-set race time-scale. Applied to keyboard (virtual) riders only — if
 	# this rider is on a power meter / trainer they race at real time (see

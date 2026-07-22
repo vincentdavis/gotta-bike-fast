@@ -1107,11 +1107,11 @@ func _on_enter_pressed(code: String) -> void:
 	if game.is_empty():
 		_set_ride_busy(false, "Could not load %s" % code)
 		return
-	if str(game.get("state", "")) != "LOBBY":
-		# It left the lobby between listing and Enter — the countdown broadcast
-		# has already fired, so entering now would strand us in the lobby.
-		# Refuse and refresh so the stale row drops off the list.
-		_set_ride_busy(false, "%s already started — you can't enter now." % code)
+	var state := str(game.get("state", ""))
+	if state != "LOBBY" and state != "COUNTDOWN" and state != "RACING":
+		# FINISHED / CANCELED — nothing to enter. Refresh so the stale row
+		# drops off the list.
+		_set_ride_busy(false, "%s has ended — you can't enter it." % code)
 		_load_my_races()
 		return
 	GameSession.code = str(game["code"])
@@ -1122,13 +1122,28 @@ func _on_enter_pressed(code: String) -> void:
 		"length_m": float(game.get("course_length_m", 0.0)),
 	}
 	GameSession.participants = game.get("participants", [])
-	GameSession.state = str(game.get("state", "LOBBY"))
+	GameSession.state = state
 	GameSession.scheduled_start_at_unix_s = GameSession.parse_iso_to_unix(
 		str(game.get("scheduled_start_at", ""))
 	)
 	GameSession.game_speed = float(game.get("game_speed", 1.0))
 	GameSession.is_solo = false
-	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+	if state == "LOBBY":
+		get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+		return
+	# COUNTDOWN / RACING: the lobby's countdown broadcast fired before we
+	# connected, so waiting there would strand us. Go straight to the ride —
+	# it holds keyboard riders in the pen until race_started (COUNTDOWN) or
+	# releases them immediately as a late join (RACING, see ride_controller).
+	if state == "COUNTDOWN":
+		var cd_start: float = GameSession.parse_iso_to_unix(
+			str(game.get("countdown_starts_at", ""))
+		)
+		if cd_start > 0.0:
+			GameSession.race_starts_at_unix_s = (
+				cd_start + float(game.get("countdown_duration_s", 30))
+			)
+	get_tree().change_scene_to_file("res://scenes/ride.tscn")
 
 
 func _power_source_text() -> String:
