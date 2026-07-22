@@ -12,6 +12,10 @@ var rider_weight_kg: float = 75.0
 var rider_height_m: float = 1.75
 var rider_ftp_w: int = 200
 var rider_cda_factor: float = 1.0
+# Critical Power curve: W/kg at CPLimiter.DURATIONS_S. Empty = profile
+# predates CP curves → ride_controller falls back to the style preset.
+var rider_cp_style: String = "rouleur"
+var rider_cp_wkg: Array = []
 
 # Loadout — picked rider's equipped Bike / Wheels / Tires. Empty Dictionary
 # means nothing equipped in that slot; ride_controller falls back to the
@@ -35,6 +39,10 @@ var is_solo: bool = false
 # Host-set race time-scale (1.0 = real time). Read from the game detail on
 # create/join; applied client-side in the ride, gated to keyboard riders.
 var game_speed: float = 1.0
+# Host-set power limits for the race (empty = unlimited). Keys mirror the
+# backend: max_acp_kj / max_acp_kj_per_kg / max_cp_w / max_cp_wkg. Each
+# client clamps its own rider's CP curve to fit (CPLimiter).
+var limits: Dictionary = {}
 
 # Dev-menu return target. Set by whatever screen opens the dev menu so
 # the menu's Back button can return there. The dev menu clears this on
@@ -66,6 +74,8 @@ func set_rider(rider: Dictionary) -> void:
 	rider_height_m = float(rider.get("height_m", 1.75))
 	rider_ftp_w = int(rider.get("ftp_w", 200))
 	rider_cda_factor = float(rider.get("cda_factor", 1.0))
+	rider_cp_style = str(rider.get("cp_style", "rouleur"))
+	rider_cp_wkg = rider.get("cp_wkg") if rider.get("cp_wkg") is Array else []
 	# Loadout — present as a nested object when equipped, null otherwise.
 	rider_bike = _as_dict(rider.get("bike"))
 	rider_wheels = _as_dict(rider.get("wheels"))
@@ -85,6 +95,8 @@ func clear_rider() -> void:
 	rider_height_m = 1.75
 	rider_ftp_w = 200
 	rider_cda_factor = 1.0
+	rider_cp_style = "rouleur"
+	rider_cp_wkg = []
 	rider_bike = {}
 	rider_wheels = {}
 	rider_tires = {}
@@ -119,6 +131,7 @@ func reset() -> void:
 	scheduled_start_at_unix_s = 0.0
 	is_solo = false
 	game_speed = 1.0
+	limits = {}
 
 
 func is_host() -> bool:

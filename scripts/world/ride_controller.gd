@@ -7,7 +7,9 @@ extends Node3D
 const HUD_SCENE := preload("res://scenes/hud.tscn")
 
 const POWER_RATE_WPS := 80.0
-const MAX_POWER_W := 1000.0
+# Absolute input ceiling only — the real keyboard cap is the rider's CP curve
+# (cp_limiter). High enough that no preset's 5s point gets truncated.
+const MAX_POWER_W := 2000.0
 const STARTING_POWER_W := 100.0
 const LATERAL_SPEED_MPS := 3.0
 const ROAD_HALF_WIDTH_M := 2.0  # soft clamp so the rider stays on the road
@@ -42,6 +44,9 @@ var kit: PhysicsKit = PhysicsKit.new()
 var rider_id: String = ""
 var current_ride_id: String = ""
 var current_course: Dictionary = {}
+# Critical Power limiter: caps keyboard power to the rider's CP curve (clamped
+# to the race's limits). Sensor power is never clamped — real legs are real.
+var cp_limiter: CPLimiter = null
 
 var is_riding: bool = false
 var is_racing: bool = false  # false during the pre-race pen (game mode only)
@@ -1618,6 +1623,7 @@ func _start_solo() -> void:
 	current_ride_id = str(ride["id"])
 	_open_local_jsonl()
 
+	_setup_cp_limiter({})  # solo: your own curve, no race limits
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = true  # solo starts racing immediately
@@ -1690,6 +1696,7 @@ func _start_game() -> void:
 	# server-side finish-on-disconnect path. Lobby opened it without one.
 	WorldClient.connect_to_game(GameSession.code, rider_id, current_ride_id)
 
+	_setup_cp_limiter(GameSession.limits)
 	target_power_w = STARTING_POWER_W
 	is_riding = true
 	is_racing = false  # held in the pen until race_started
@@ -1888,6 +1895,22 @@ func _process(delta: float) -> void:
 	_update_power_input(delta)
 
 
+func _setup_cp_limiter(race_limits: Dictionary) -> void:
+	# Build this rider's power ceiling: profile curve (W/kg × weight, falling
+	# back to their style preset for pre-CP profiles), clamped to fit the
+	# race's limits. Mirrors the web's riders/cp.py so every surface agrees.
+	var wkg: Array = GameSession.rider_cp_wkg
+	if wkg.size() != CPLimiter.DURATIONS_S.size():
+		wkg = CPLimiter.preset_wkg(GameSession.rider_cp_style)
+	var curve := CPLimiter.curve_from_wkg(wkg, GameSession.rider_weight_kg)
+	curve = CPLimiter.clamp_curve_to_limits(
+		curve, GameSession.rider_weight_kg, race_limits
+	)
+	cp_limiter = CPLimiter.new()
+	cp_limiter.setup(curve)
+	hud.set_cp_curve(cp_limiter)
+
+
 func _update_power_input(delta: float) -> void:
 	# Sensor power takes over only when the player selected SENSOR *and* a
 	# live reading is fresh. Otherwise the keyboard ↑/↓ ramp stays in
@@ -1901,6 +1924,10 @@ func _update_power_input(delta: float) -> void:
 		target_power_w = min(target_power_w + POWER_RATE_WPS * delta, MAX_POWER_W)
 	if Input.is_key_pressed(KEY_DOWN):
 		target_power_w = max(target_power_w - POWER_RATE_WPS * delta, 0.0)
+	# CP curve: keyboard power can never exceed what the rider has left in
+	# any rolling window. Only bites while racing (the pen doesn't burn ACP).
+	if is_racing and cp_limiter != null and cp_limiter.is_active():
+		target_power_w = minf(target_power_w, cp_limiter.allowed_power_w())
 
 
 func _animation_cadence() -> float:
@@ -1946,6 +1973,10 @@ func _physics_process(delta: float) -> void:
 	# telemetry cadence, and steering below stay on the real delta.
 	var sim_delta := delta * _effective_game_speed()
 	if is_racing:
+		# Feed the CP windows in sim time (even for sensor riders — their HUD
+		# curve still tracks effort; only keyboard power gets clamped).
+		if cp_limiter != null:
+			cp_limiter.add_sample(target_power_w, sim_delta)
 		velocity_mps = CyclingPhysics.step_velocity(
 			target_power_w, velocity_mps, gradient, kit, sim_delta, draft_mult
 		)

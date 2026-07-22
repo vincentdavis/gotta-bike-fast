@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/hud.gd" id="1_hud"]
 [ext_resource type="Script" path="res://scripts/ui/draggable_panel.gd" id="2_drag"]
+[ext_resource type="Script" path="res://scripts/ui/cp_curve_box.gd" id="3_cpbox"]
 
 [node name="HUD" type="CanvasLayer"]
 script = ExtResource("1_hud")
@@ -145,6 +146,42 @@ theme_override_font_sizes/font_size = 16
 [node name="StatusLabel" type="Label" parent="StatsPanel/Margin/VBox"]
 text = ""
 theme_override_font_sizes/font_size = 18
+
+[node name="CPPanel" type="PanelContainer" parent="."]
+visible = false
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -196.0
+offset_right = 312.0
+offset_bottom = -20.0
+grow_vertical = 0
+mouse_default_cursor_shape = 13
+script = ExtResource("2_drag")
+panel_id = "cp_curve"
+default_size = Vector2(296, 176)
+
+[node name="Margin" type="MarginContainer" parent="CPPanel"]
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="CPPanel/Margin"]
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="CPPanel/Margin/VBox"]
+text = "CP curve"
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+
+[node name="CurveBox" type="Control" parent="CPPanel/Margin/VBox"]
+custom_minimum_size = Vector2(120, 100)
+size_flags_horizontal = 3
+size_flags_vertical = 3
+mouse_filter = 2
+script = ExtResource("3_cpbox")
 
 [node name="MinimapPanel" type="PanelContainer" parent="."]
 visible = false

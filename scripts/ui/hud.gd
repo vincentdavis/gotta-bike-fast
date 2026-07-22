@@ -17,6 +17,8 @@ extends CanvasLayer
 @onready var countdown_label: Label = $CountdownLabel
 @onready var leaderboard_panel: PanelContainer = $LeaderboardPanel
 @onready var leaderboard_list: VBoxContainer = $LeaderboardPanel/Margin/VBox/Scroll/List
+@onready var cp_panel: PanelContainer = $CPPanel
+@onready var cp_curve_box: CPCurveBox = $CPPanel/Margin/VBox/CurveBox
 @onready var minimap_panel: PanelContainer = $MinimapPanel
 @onready var minimap_box: Control = $MinimapPanel/Margin/VBox/MapBox
 @onready var minimap_rect: TextureRect = $MinimapPanel/Margin/VBox/MapBox/MinimapRect
@@ -222,6 +224,13 @@ func show_countdown(seconds_remaining: float) -> void:
 
 func hide_countdown() -> void:
 	countdown_label.text = ""
+
+
+func set_cp_curve(limiter: CPLimiter) -> void:
+	# Show the rider's Critical Power panel for this ride. The box redraws
+	# itself from the limiter (curve + live rolling averages + headroom).
+	cp_curve_box.set_limiter(limiter)
+	cp_panel.visible = limiter != null and limiter.is_active()
 
 
 func set_minimap_texture(tex: Texture2D) -> void:

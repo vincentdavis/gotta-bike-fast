@@ -1127,6 +1127,8 @@ func _on_enter_pressed(code: String) -> void:
 		str(game.get("scheduled_start_at", ""))
 	)
 	GameSession.game_speed = float(game.get("game_speed", 1.0))
+	var race_limits: Variant = game.get("limits")
+	GameSession.limits = race_limits if race_limits is Dictionary else {}
 	GameSession.is_solo = false
 	if state == "LOBBY":
 		get_tree().change_scene_to_file("res://scenes/lobby.tscn")
