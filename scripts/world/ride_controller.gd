@@ -1984,6 +1984,14 @@ func _physics_process(delta: float) -> void:
 			peak_speed_mps = velocity_mps
 		distance_m += velocity_mps * sim_delta * float(heading)
 		elapsed_s += sim_delta
+		# Races end at the line: covering the course length finishes the ride
+		# and lands on the results screen. Solo rides keep lapping (Esc ends
+		# them) — the loop is the point of a solo spin.
+		if not _is_solo_ride and not _finishing:
+			var finish_m := float(current_course.get("length_m", 0.0))
+			if finish_m > 0.0 and distance_m >= finish_m:
+				hud.show_toast("🏁 Finished!")
+				_finish_ride()
 	else:
 		# Pen: bike is held; even with power applied no real forward speed.
 		velocity_mps = 0.0
@@ -2240,7 +2248,6 @@ func _finish_ride() -> void:
 	# Hand trainer resistance back to flat so the rider isn't left pushing
 	# against the last climb's grade after the ride ends.
 	SensorBridge.release_trainer()
-	WorldClient.disconnect_now()
 	hud.set_status("Finishing ride…")
 
 	# Flush the in-memory tail to disk + Django before announcing finish.
@@ -2260,8 +2267,23 @@ func _finish_ride() -> void:
 		current_ride_id, totals, "explicit"
 	)
 	if result.is_empty():
-		hud.set_status("Finish failed")
-		return
+		# One retry — every finisher POSTs within seconds of each other.
+		hud.set_status("Finish didn't reach the server — retrying…")
+		await get_tree().create_timer(1.5).timeout
+		result = await ApiClient.finish_ride(current_ride_id, totals, "explicit")
+
+	# Drop the game socket only AFTER the finish (with its real totals) is
+	# recorded: the server finalizes the ride the instant the WS closes, and
+	# Django's finalize is first-write-wins — disconnecting first turns every
+	# line-crosser into a totals-less DNF.
+	WorldClient.disconnect_now()
+
+	if result.is_empty():
+		# Still unreachable. Don't strand the rider at the line — the server's
+		# disconnect/timeout sweep will finalize the ride from the uploaded
+		# samples' row; carry on to the results/summary with local numbers.
+		hud.show_toast("⚠ Finish not confirmed — showing local results")
+		result = totals
 
 	var dist_km := float(result.get("total_distance_m", distance_m)) / 1000.0
 	var time_s := float(result.get("total_duration_s", elapsed_s))

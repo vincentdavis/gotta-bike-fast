@@ -463,12 +463,13 @@ func list_my_games(rider_id: String) -> Array:
 
 
 func list_game_results(code: String) -> Array:
-	# After Phase 5e race results are derived from Django's RideHistory
-	# rows tagged with this race code. The dedicated endpoint lands in
-	# 5e-8; until then, results.tscn falls back to GameSession participants.
+	# Cross-participant race results (best-first, one row per rider) from
+	# Django's aggregate endpoint — rows carry exactly what results.tscn
+	# renders: display_name, bib_number, distance_m, duration_s,
+	# avg_power_w, max_power_w, finished.
 	var result: Dictionary = await _do_request(
 		"GET",
-		"/api/history/rides?race_code=%s&limit=50" % code,
+		"/api/history/races/%s/results" % code,
 		null,
 		web_url,
 	)
