@@ -140,6 +140,10 @@ var _ground_strip_inst: MeshInstance3D = null
 # _clear_existing_scenery's path (those are direct-child MultiMeshInstance3D);
 # freed/rebuilt explicitly in _setup_belleville_dressing.
 var _belleville_dressing: Node3D = null
+# Towns along the course (building MultiMeshes) — nested under one Node3D so
+# _clear_existing_scenery's direct-child sweep never touches it; rebuilt
+# wholesale when terrain arrives, same contract as the dressing.
+var _towns: Node3D = null
 # Distant mountains + leaning city — a rider-locked backdrop. Built once and
 # moved to the rider's position every physics tick, so the horizon stays
 # populated for the whole ride (a midpoint-anchored ring vanished into the fog
@@ -368,6 +372,7 @@ func _build_course_visuals() -> void:
 	_setup_markers()
 	_setup_scenery()
 	_setup_belleville_dressing()
+	_setup_towns()
 	_setup_backdrop()
 	# Async terrain fetch — populates _terrain_heights + adds the mesh
 	# beside the strip when it arrives. Re-places scenery onto the
@@ -479,6 +484,8 @@ func _setup_terrain_async() -> void:
 	# Rebuild the Belleville dressing too so its poles sit on the real terrain
 	# height instead of the path-elevation fallback used at first build.
 	_setup_belleville_dressing()
+	# And the towns — their foundations also snap to the real ground.
+	_setup_towns()
 
 
 func _setup_minimap_async() -> void:
@@ -1365,6 +1372,201 @@ func _setup_belleville_dressing() -> void:
 		var inst := MultiMeshInstance3D.new()
 		inst.multimesh = mm
 		root.add_child(inst)
+
+
+# --- Towns ------------------------------------------------------------------
+
+const TOWN_SEED := 0xBE11E711
+const TOWN_MIN_ROAD_CLEAR_M := 7.5  # a building never straddles the road
+const TOWN_MIN_SPACING_M := 9.0     # between building origins
+
+
+func _setup_towns() -> void:
+	# Villages along the route: a town around the start/finish line, a hamlet
+	# or two mid-course, and lone farmsteads in between. Deterministic seed so
+	# every rider sees the same world; one MultiMesh per building variety.
+	if _towns != null:
+		_towns.queue_free()
+		_towns = null
+	if _course_path.size() < 2:
+		return
+	var total: float = float(_course_path[_course_path.size() - 1]["distance_m"])
+	if total < 200.0:
+		return
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = TOWN_SEED
+	var density: float = GraphicsSettings.town_building_scale()
+
+	# Plan first, place after: entries {d, side, offset, variety, tint}.
+	var plan: Array = []
+	_plan_settlement(
+		plan, rng, 0.0, minf(140.0, total * 0.2), int(round(14.0 * density)), true
+	)
+	if total > 1500.0:
+		_plan_settlement(
+			plan, rng, total * rng.randf_range(0.36, 0.5), 60.0,
+			int(round(6.0 * density)), false
+		)
+		_plan_settlement(
+			plan, rng, total * rng.randf_range(0.64, 0.8), 60.0,
+			int(round(6.0 * density)), false
+		)
+	for _i in int(round(4.0 * density)):
+		_plan_farmstead(plan, rng, total * rng.randf_range(0.08, 0.92))
+
+	var by_variety: Array = []
+	for _v in BuildingFactory.VARIETY_COUNT:
+		by_variety.append([])
+	var placed_xz: Array = []
+	for entry in plan:
+		var d: float = _wrap_distance(entry["d"])
+		var center := _position_at_distance(d)
+		var tng := _tangent_at_distance(d)
+		var right := Vector3(-tng.z, 0.0, tng.x)
+		var side: float = entry["side"]
+		var pos := center + right * (float(entry["offset"]) * side)
+		if not _town_spot_clear(pos, placed_xz):
+			continue
+		pos.y = (
+			_terrain_height_at(pos.x, pos.z)
+			if _terrain_width >= 2
+			else center.y - 0.35
+		)
+		pos.y -= 0.15  # settle the foundation into sloped ground
+		# The authored front (+X) faces the road, with a hand-drawn wobble:
+		# yaw jitter plus the signature Belleville lean.
+		var face := (-right * side).normalized()
+		var yaw := atan2(-face.z, face.x) + rng.randf_range(-0.09, 0.09)
+		var lean := Vector3(
+			rng.randf_range(-0.025, 0.025), yaw, rng.randf_range(-0.025, 0.025)
+		)
+		var basis := Basis.from_euler(lean).scaled(
+			Vector3.ONE * rng.randf_range(0.92, 1.12)
+		)
+		by_variety[entry["variety"]].append([Transform3D(basis, pos), entry["tint"]])
+		placed_xz.append(Vector2(pos.x, pos.z))
+
+	var root := Node3D.new()
+	root.name = "Towns"
+	add_child(root)
+	_towns = root
+	for v in BuildingFactory.VARIETY_COUNT:
+		var entries: Array = by_variety[v]
+		if entries.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true  # facade tint; roofs/trim have fixed materials
+		mm.mesh = BuildingFactory.variety_mesh(v)
+		mm.instance_count = entries.size()
+		for i in entries.size():
+			mm.set_instance_transform(i, entries[i][0])
+			mm.set_instance_color(i, entries[i][1])
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		root.add_child(inst)
+
+
+func _plan_settlement(
+	plan: Array,
+	rng: RandomNumberGenerator,
+	center_d: float,
+	window_m: float,
+	count: int,
+	is_town: bool,
+) -> void:
+	if count <= 0:
+		return
+	if is_town:
+		# Every proper town gets its church, set back from the road.
+		plan.append({
+			"d": center_d + rng.randf_range(-window_m * 0.4, window_m * 0.4),
+			"side": -1.0 if rng.randf() < 0.5 else 1.0,
+			"offset": rng.randf_range(12.0, 15.0),
+			"variety": BuildingFactory.Variety.CHURCH,
+			"tint": Belleville.PAPER_LIGHT.darkened(rng.randf_range(0.0, 0.06)),
+		})
+	for _i in count:
+		var variety := _pick_settlement_variety(rng, is_town)
+		plan.append({
+			"d": center_d + rng.randf_range(-window_m, window_m),
+			"side": -1.0 if rng.randf() < 0.5 else 1.0,
+			"offset": rng.randf_range(8.5, 13.0),
+			"variety": variety,
+			"tint": _building_tint(rng, variety),
+		})
+
+
+func _plan_farmstead(plan: Array, rng: RandomNumberGenerator, d: float) -> void:
+	# A farmhouse set well back from the road, usually with its barn.
+	var side := -1.0 if rng.randf() < 0.5 else 1.0
+	plan.append({
+		"d": d,
+		"side": side,
+		"offset": rng.randf_range(16.0, 26.0),
+		"variety": BuildingFactory.Variety.FARMHOUSE,
+		"tint": _building_tint(rng, BuildingFactory.Variety.FARMHOUSE),
+	})
+	if rng.randf() < 0.7:
+		plan.append({
+			"d": d + rng.randf_range(10.0, 18.0),
+			"side": side,
+			"offset": rng.randf_range(18.0, 30.0),
+			"variety": BuildingFactory.Variety.BARN,
+			"tint": _building_tint(rng, BuildingFactory.Variety.BARN),
+		})
+
+
+func _pick_settlement_variety(rng: RandomNumberGenerator, is_town: bool) -> int:
+	var roll := rng.randf()
+	if is_town:
+		if roll < 0.45:
+			return BuildingFactory.Variety.TOWNHOUSE
+		if roll < 0.85:
+			return BuildingFactory.Variety.COTTAGE
+		return BuildingFactory.Variety.FARMHOUSE
+	if roll < 0.5:
+		return BuildingFactory.Variety.COTTAGE
+	if roll < 0.8:
+		return BuildingFactory.Variety.FARMHOUSE
+	return BuildingFactory.Variety.BARN
+
+
+func _building_tint(rng: RandomNumberGenerator, variety: int) -> Color:
+	# Facade colors (walls surface only — roofs/windows have fixed materials).
+	if variety == BuildingFactory.Variety.BARN:
+		return Belleville.UMBER.lerp(Belleville.TERRACOTTA, 0.3).darkened(
+			rng.randf_range(0.0, 0.12)
+		)
+	var facades: Array = [
+		Belleville.PAPER,
+		Belleville.PAPER_LIGHT,
+		Belleville.OCHRE.lerp(Belleville.PAPER, 0.3),
+		Belleville.TERRACOTTA.lerp(Belleville.PAPER, 0.45),
+		Belleville.SAGE.lerp(Belleville.PAPER, 0.5),
+	]
+	var pick: Color = facades[rng.randi_range(0, facades.size() - 1)]
+	return pick.darkened(rng.randf_range(0.0, 0.1))
+
+
+func _town_spot_clear(pos: Vector3, placed_xz: Array) -> bool:
+	# Off the road: nearest-path-point scan, the tree scatter's approach with
+	# a wider margin for building footprints (a switchback can bring another
+	# part of the course close behind a building's plot).
+	var min_road_sq := TOWN_MIN_ROAD_CLEAR_M * TOWN_MIN_ROAD_CLEAR_M
+	for p in _course_path:
+		var dx: float = float(p["x_m"]) - pos.x
+		var dz: float = -float(p["y_m"]) - pos.z
+		if dx * dx + dz * dz < min_road_sq:
+			return false
+	var min_sp_sq := TOWN_MIN_SPACING_M * TOWN_MIN_SPACING_M
+	for q in placed_xz:
+		var ddx: float = q.x - pos.x
+		var ddz: float = q.y - pos.z
+		if ddx * ddx + ddz * ddz < min_sp_sq:
+			return false
+	return true
 
 
 func _setup_backdrop() -> void:

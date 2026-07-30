@@ -189,6 +189,15 @@ func tree_count() -> int:
 		_: return 520
 
 
+func town_building_scale() -> float:
+	# Multiplier on town/hamlet building counts (_setup_towns). Buildings are
+	# MultiMesh-batched like trees but carry more vertices each.
+	match quality:
+		Quality.LOW: return 0.55
+		Quality.MEDIUM: return 0.8
+		_: return 1.0
+
+
 func quality_name() -> String:
 	match quality:
 		Quality.LOW: return "Low"
