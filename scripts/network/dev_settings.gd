@@ -23,9 +23,9 @@ const ENVIRONMENTS := {
 		"ws_url": "ws://127.0.0.1:8001",
 	},
 	"ALPHA_1": {
-		"base_url": "https://fastapi-production-e5cc.up.railway.app",
-		"web_url": "https://web-production-f89db.up.railway.app",
-		"ws_url": "wss://fastapi-production-e5cc.up.railway.app",
+		"base_url": "https://virtual-api.gotta.bike",
+		"web_url": "https://virtual.gotta.bike",
+		"ws_url": "wss://virtual-api.gotta.bike",
 	},
 }
 

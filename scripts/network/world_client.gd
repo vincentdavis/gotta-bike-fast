@@ -18,8 +18,15 @@ signal race_ended(reason: String)
 
 var ws_url: String = ""  # initialized from DevSettings on _ready
 
+# The prod WS now rides through Cloudflare (virtual-api.gotta.bike), which
+# closes idle proxied connections after ~100 s. A rider waiting quietly in a
+# lobby sends nothing, so we ping to keep the pipe warm; the server ignores
+# unknown message types. Also required inside Discord's Activity proxy later.
+const PING_INTERVAL_S := 30.0
+
 var _peer: WebSocketPeer = null
 var _last_state: int = WebSocketPeer.STATE_CLOSED
+var _ping_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -60,11 +67,19 @@ func disconnect_now() -> void:
 		_peer.close()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _peer == null:
 		return
 	_peer.poll()
 	var current_state: int = _peer.get_ready_state()
+
+	if current_state == WebSocketPeer.STATE_OPEN:
+		_ping_accum += delta
+		if _ping_accum >= PING_INTERVAL_S:
+			_ping_accum = 0.0
+			_peer.send_text(JSON.stringify({"type": "ping"}))
+	else:
+		_ping_accum = 0.0
 
 	if current_state != _last_state:
 		if current_state == WebSocketPeer.STATE_OPEN:
