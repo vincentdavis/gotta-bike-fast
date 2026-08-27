@@ -1,5 +1,12 @@
 extends CanvasLayer
 
+# Tap events from the on-screen touch controls (phones/tablets). The hold
+# buttons are read by ride_controller each tick via touch_power_dir /
+# touch_steer_dir instead — held state, not events, mirroring the keyboard.
+signal touch_turn
+signal touch_camera
+signal touch_finish
+
 @onready var stats_panel: PanelContainer = $StatsPanel
 @onready var power_label: Label = $StatsPanel/Margin/VBox/PowerLabel
 @onready var cadence_label: Label = $StatsPanel/Margin/VBox/CadenceLabel
@@ -38,6 +45,31 @@ var _stat_base_color := Color(1, 1, 1)
 var _hud_text_color := Color(1, 1, 1)
 var _hud_outline_color := Color(0, 0, 0, 0.7)  # reused for dynamic leaderboard rows
 
+# --- Touch controls (built in code; VISIBILITY_TOUCHSCREEN_ONLY hides them
+# on desktop). ◀▶ steer bottom-left, ▲▼ power bottom-right, small taps
+# (camera / turn / finish) along the top. Finish needs a confirming second
+# tap so a stray thumb can't end a race.
+const TOUCH_BTN := 96.0
+const TOUCH_SMALL := 56.0
+const TOUCH_MARGIN := 18.0
+const TOUCH_GAP := 12.0
+const FINISH_CONFIRM_MS := 2500
+
+var _touch_up: TouchScreenButton = null
+var _touch_down: TouchScreenButton = null
+var _touch_left: TouchScreenButton = null
+var _touch_right: TouchScreenButton = null
+var _touch_cam: TouchScreenButton = null
+var _touch_turn: TouchScreenButton = null
+var _touch_fin: TouchScreenButton = null
+var _touch_fin_glyph: Label = null
+var _finish_armed_until_ms: int = 0
+
+
+func _ready() -> void:
+	_build_touch_controls()
+	get_viewport().size_changed.connect(_layout_touch_controls)
+
 
 func _process(delta: float) -> void:
 	if _camera_toast_t > 0.0:
@@ -46,6 +78,114 @@ func _process(delta: float) -> void:
 			camera_label.modulate.a = 0.0
 		elif _camera_toast_t < CAMERA_TOAST_FADE_S:
 			camera_label.modulate.a = _camera_toast_t / CAMERA_TOAST_FADE_S
+	# Disarm the finish confirm once its window lapses untapped.
+	if _finish_armed_until_ms > 0 and Time.get_ticks_msec() > _finish_armed_until_ms:
+		_finish_armed_until_ms = 0
+		if _touch_fin_glyph != null:
+			_touch_fin_glyph.text = "🏁"
+
+
+func touch_power_dir() -> float:
+	# −1‥+1 held-ramp direction from the on-screen ▲/▼ buttons.
+	var dir := 0.0
+	if _touch_up != null and _touch_up.is_pressed():
+		dir += 1.0
+	if _touch_down != null and _touch_down.is_pressed():
+		dir -= 1.0
+	return dir
+
+
+func touch_steer_dir() -> float:
+	var dir := 0.0
+	if _touch_left != null and _touch_left.is_pressed():
+		dir -= 1.0
+	if _touch_right != null and _touch_right.is_pressed():
+		dir += 1.0
+	return dir
+
+
+func _build_touch_controls() -> void:
+	_touch_left = _touch_button("◀", TOUCH_BTN)
+	_touch_right = _touch_button("▶", TOUCH_BTN)
+	_touch_up = _touch_button("▲", TOUCH_BTN)
+	_touch_down = _touch_button("▼", TOUCH_BTN)
+	_touch_cam = _touch_button("📷", TOUCH_SMALL)
+	_touch_cam.released.connect(func() -> void: touch_camera.emit())
+	_touch_turn = _touch_button("🔄", TOUCH_SMALL)
+	_touch_turn.released.connect(func() -> void: touch_turn.emit())
+	_touch_fin = _touch_button("🏁", TOUCH_SMALL)
+	_touch_fin_glyph = _touch_fin.get_node("Glyph")
+	_touch_fin.released.connect(_on_touch_finish)
+	_layout_touch_controls()
+
+
+func _on_touch_finish() -> void:
+	var now := Time.get_ticks_msec()
+	if now <= _finish_armed_until_ms:
+		_finish_armed_until_ms = 0
+		_touch_fin_glyph.text = "🏁"
+		touch_finish.emit()
+		return
+	_finish_armed_until_ms = now + FINISH_CONFIRM_MS
+	_touch_fin_glyph.text = "✓?"
+
+
+func _touch_button(glyph: String, size_px: float) -> TouchScreenButton:
+	var btn := TouchScreenButton.new()
+	btn.visibility_mode = TouchScreenButton.VISIBILITY_TOUCHSCREEN_ONLY
+	btn.texture_normal = _touch_texture(size_px, 0.30)
+	btn.texture_pressed = _touch_texture(size_px, 0.55)
+	var shape := RectangleShape2D.new()
+	shape.size = Vector2(size_px, size_px)
+	btn.shape = shape
+	btn.shape_centered = false
+	var lbl := Label.new()
+	lbl.name = "Glyph"
+	lbl.text = glyph
+	lbl.size = Vector2(size_px, size_px)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", int(size_px * 0.42))
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(lbl)
+	add_child(btn)
+	return btn
+
+
+func _touch_texture(size_px: float, alpha: float) -> GradientTexture2D:
+	# A flat translucent square — TouchScreenButton needs a texture to have a
+	# visible footprint, and a solid gradient is the cheapest way to one.
+	var tex := GradientTexture2D.new()
+	tex.width = int(size_px)
+	tex.height = int(size_px)
+	var g := Gradient.new()
+	var ink := Color(0.18, 0.16, 0.14, alpha)
+	g.offsets = PackedFloat32Array([0.0, 1.0])
+	g.colors = PackedColorArray([ink, ink])
+	tex.gradient = g
+	return tex
+
+
+func _layout_touch_controls() -> void:
+	if _touch_up == null:
+		return
+	var vs := get_viewport().get_visible_rect().size
+	var m := TOUCH_MARGIN
+	# Steering pair, bottom-left.
+	_touch_left.position = Vector2(m, vs.y - m - TOUCH_BTN)
+	_touch_right.position = Vector2(m + TOUCH_BTN + TOUCH_GAP, vs.y - m - TOUCH_BTN)
+	# Power stack, bottom-right.
+	_touch_up.position = Vector2(
+		vs.x - m - TOUCH_BTN, vs.y - m - TOUCH_BTN * 2.0 - TOUCH_GAP
+	)
+	_touch_down.position = Vector2(vs.x - m - TOUCH_BTN, vs.y - m - TOUCH_BTN)
+	# Small taps, top row just right of center — clear of the stats panel on
+	# the left and the leaderboard on the right at default layouts.
+	var row_w := TOUCH_SMALL * 3.0 + TOUCH_GAP * 2.0
+	var x0 := vs.x * 0.60 - row_w / 2.0
+	_touch_cam.position = Vector2(x0, m)
+	_touch_turn.position = Vector2(x0 + TOUCH_SMALL + TOUCH_GAP, m)
+	_touch_fin.position = Vector2(x0 + (TOUCH_SMALL + TOUCH_GAP) * 2.0, m)
 
 
 func show_camera(view_name: String) -> void:

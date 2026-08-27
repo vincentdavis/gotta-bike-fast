@@ -1782,6 +1782,10 @@ func _setup_camera() -> void:
 func _setup_hud() -> void:
 	hud = HUD_SCENE.instantiate()
 	add_child(hud)
+	# On-screen touch taps (phones): mirror the T / C / Esc keys.
+	hud.touch_turn.connect(_on_touch_turn)
+	hud.touch_camera.connect(_on_touch_camera)
+	hud.touch_finish.connect(_on_touch_finish_tap)
 	# Announce the starting view so the camera feature advertises itself (and
 	# confirms a restored preference) instead of staying silent until the
 	# player happens to press a camera key.
@@ -2025,6 +2029,22 @@ func _input(event: InputEvent) -> void:
 			heading = -heading
 
 
+func _on_touch_turn() -> void:
+	if is_riding:
+		heading = -heading
+
+
+func _on_touch_camera() -> void:
+	if camera_rig != null:
+		_apply_camera_change(camera_rig.cycle_next())
+
+
+func _on_touch_finish_tap() -> void:
+	# The HUD already demanded a confirming second tap.
+	if is_riding:
+		_finish_ride()
+
+
 func _effective_game_speed() -> float:
 	return _game_speed if _speed_allowed() else 1.0
 
@@ -2122,10 +2142,16 @@ func _update_power_input(delta: float) -> void:
 	if SensorBridge.using_sensor() and SensorBridge.has_fresh_power():
 		target_power_w = clampf(SensorBridge.latest_power_w, 0.0, MAX_POWER_W)
 		return
+	var ramp := 0.0
 	if Input.is_key_pressed(KEY_UP):
-		target_power_w = min(target_power_w + POWER_RATE_WPS * delta, MAX_POWER_W)
+		ramp += 1.0
 	if Input.is_key_pressed(KEY_DOWN):
-		target_power_w = max(target_power_w - POWER_RATE_WPS * delta, 0.0)
+		ramp -= 1.0
+	ramp = clampf(ramp + hud.touch_power_dir(), -1.0, 1.0)
+	if ramp > 0.0:
+		target_power_w = min(target_power_w + POWER_RATE_WPS * delta * ramp, MAX_POWER_W)
+	elif ramp < 0.0:
+		target_power_w = max(target_power_w + POWER_RATE_WPS * delta * ramp, 0.0)
 	# CP curve: keyboard power can never exceed what the rider has left in
 	# any rolling window. Only bites while racing (the pen doesn't burn ACP).
 	if is_racing and cp_limiter != null and cp_limiter.is_active():
@@ -2205,6 +2231,7 @@ func _physics_process(delta: float) -> void:
 		lateral_input -= LATERAL_SPEED_MPS * delta
 	if Input.is_key_pressed(KEY_RIGHT):
 		lateral_input += LATERAL_SPEED_MPS * delta
+	lateral_input += hud.touch_steer_dir() * LATERAL_SPEED_MPS * delta
 	_lateral_offset += lateral_input * float(heading)
 	if _lateral_offset > ROAD_HALF_WIDTH_M:
 		_lateral_offset = ROAD_HALF_WIDTH_M
