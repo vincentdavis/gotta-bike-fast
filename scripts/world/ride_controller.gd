@@ -47,6 +47,9 @@ var current_course: Dictionary = {}
 # Critical Power limiter: caps keyboard power to the rider's CP curve (clamped
 # to the race's limits). Sensor power is never clamped — real legs are real.
 var cp_limiter: CPLimiter = null
+# Procedural ride audio (wind bed + countdown beeps + finish stinger).
+var ride_audio: RideAudio = null
+var _last_countdown_n: int = -1
 
 var is_riding: bool = false
 var is_racing: bool = false  # false during the pre-race pen (game mode only)
@@ -1786,6 +1789,8 @@ func _setup_hud() -> void:
 	hud.touch_turn.connect(_on_touch_turn)
 	hud.touch_camera.connect(_on_touch_camera)
 	hud.touch_finish.connect(_on_touch_finish_tap)
+	ride_audio = RideAudio.new()
+	add_child(ride_audio)
 	# Announce the starting view so the camera feature advertises itself (and
 	# confirms a restored preference) instead of staying silent until the
 	# player happens to press a camera key.
@@ -1838,6 +1843,7 @@ func _start_solo() -> void:
 	if _game_speed > 1.0 and _speed_allowed():
 		hud.show_toast("⏩ Game speed %s" % _speed_label())
 	hud.set_status("Go!")
+	ride_audio.go()
 	await get_tree().create_timer(1.2).timeout
 	if is_riding:
 		hud.set_status("")
@@ -1972,6 +1978,7 @@ func _setup_start_line() -> void:
 
 
 func _on_race_started() -> void:
+	ride_audio.go()
 	is_racing = true
 	hud.hide_countdown()
 	if _start_line_node != null:
@@ -2014,6 +2021,10 @@ func _input(event: InputEvent) -> void:
 	# pen — so a player can frame their shot before the gun.
 	if event is InputEventKey and event.pressed and not event.echo:
 		if _handle_camera_key(event):
+			return
+		if event.keycode == KEY_M:
+			GraphicsSettings.set_sound_enabled(not GraphicsSettings.sound_enabled)
+			hud.show_toast("🔊 Sound on" if GraphicsSettings.sound_enabled else "🔇 Sound off")
 			return
 	if not is_riding:
 		return
@@ -2350,9 +2361,14 @@ func _physics_process(delta: float) -> void:
 		var uv := _path_minimap_uv(rp.x, -rp.z)
 		hud.set_minimap_uv(uv.x, uv.y)
 
+	ride_audio.set_speed(velocity_mps)
 	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
 		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
 		hud.show_countdown(max(0.0, remaining_s))
+		var n := int(ceil(maxf(0.0, remaining_s)))
+		if n != _last_countdown_n and n >= 1 and n <= 3:
+			ride_audio.countdown_tick()
+		_last_countdown_n = n
 
 
 # --- Drafting ---
@@ -2474,6 +2490,7 @@ func _finish_ride() -> void:
 		return
 	_finishing = true
 	is_riding = false
+	ride_audio.finish()
 	# Hand trainer resistance back to flat so the rider isn't left pushing
 	# against the last climb's grade after the ride ends.
 	SensorBridge.release_trainer()

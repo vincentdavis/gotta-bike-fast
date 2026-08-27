@@ -55,6 +55,8 @@ const GAME_SPEED_PRESETS: Array[float] = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
 const DEFAULT_GAME_SPEED := 6.0
 const MAX_GAME_SPEED := 10.0
 var game_speed: float = DEFAULT_GAME_SPEED
+# Master gate for the (procedural) ride audio; M toggles it mid-ride.
+var sound_enabled: bool = true
 
 # Menu UI scale — multiplies the window content_scale_factor for the menu so its
 # text + controls are larger / more readable. Applied by main.gd and reset to
@@ -109,6 +111,11 @@ func set_game_speed(value: float) -> void:
 	# Stored, not applied here — the ride reads game_speed at start and gates it
 	# (solo + keyboard only).
 	game_speed = clampf(value, 1.0, MAX_GAME_SPEED)
+	_save()
+
+
+func set_sound_enabled(value: bool) -> void:
+	sound_enabled = value
 	_save()
 
 
@@ -309,6 +316,7 @@ func _load() -> void:
 	hud_bg_opacity = clampf(float(cfg.get_value("hud", "bg_opacity", DEFAULT_HUD_OPACITY)), 0.0, 1.0)
 	hud_text_color = cfg.get_value("hud", "text_color", DEFAULT_HUD_TEXT)
 	game_speed = clampf(float(cfg.get_value("gameplay", "game_speed", DEFAULT_GAME_SPEED)), 1.0, MAX_GAME_SPEED)
+	sound_enabled = bool(cfg.get_value("audio", "sound_enabled", true))
 	ui_scale = clampf(float(cfg.get_value("ui", "scale", DEFAULT_UI_SCALE)), 1.0, 2.0)
 
 
@@ -323,5 +331,6 @@ func _save() -> void:
 	cfg.set_value("hud", "bg_opacity", hud_bg_opacity)
 	cfg.set_value("hud", "text_color", hud_text_color)
 	cfg.set_value("gameplay", "game_speed", game_speed)
+	cfg.set_value("audio", "sound_enabled", sound_enabled)
 	cfg.set_value("ui", "scale", ui_scale)
 	cfg.save(FILE)
