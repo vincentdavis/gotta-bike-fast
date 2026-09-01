@@ -50,6 +50,8 @@ var cp_limiter: CPLimiter = null
 # Procedural ride audio (wind bed + countdown beeps + finish stinger).
 var ride_audio: RideAudio = null
 var _last_countdown_n: int = -1
+# Settlement centres along the course (distance_m) — drives the crowd murmur.
+var _town_centers_d: Array = []
 
 var is_riding: bool = false
 var is_racing: bool = false  # false during the pre-race pen (game mode only)
@@ -1403,18 +1405,17 @@ func _setup_towns() -> void:
 
 	# Plan first, place after: entries {d, side, offset, variety, tint}.
 	var plan: Array = []
+	_town_centers_d = [0.0]  # the crowd murmur follows these
 	_plan_settlement(
 		plan, rng, 0.0, minf(140.0, total * 0.2), int(round(14.0 * density)), true
 	)
 	if total > 1500.0:
-		_plan_settlement(
-			plan, rng, total * rng.randf_range(0.36, 0.5), 60.0,
-			int(round(6.0 * density)), false
-		)
-		_plan_settlement(
-			plan, rng, total * rng.randf_range(0.64, 0.8), 60.0,
-			int(round(6.0 * density)), false
-		)
+		var hamlet1: float = total * rng.randf_range(0.36, 0.5)
+		var hamlet2: float = total * rng.randf_range(0.64, 0.8)
+		_town_centers_d.append(hamlet1)
+		_town_centers_d.append(hamlet2)
+		_plan_settlement(plan, rng, hamlet1, 60.0, int(round(6.0 * density)), false)
+		_plan_settlement(plan, rng, hamlet2, 60.0, int(round(6.0 * density)), false)
 	for _i in int(round(4.0 * density)):
 		_plan_farmstead(plan, rng, total * rng.randf_range(0.08, 0.92))
 
@@ -1551,6 +1552,21 @@ func _building_tint(rng: RandomNumberGenerator, variety: int) -> Color:
 	]
 	var pick: Color = facades[rng.randi_range(0, facades.size() - 1)]
 	return pick.darkened(rng.randf_range(0.0, 0.1))
+
+
+func _town_proximity() -> float:
+	# 0 = open country, 1 = village centre; circular distance on loops.
+	if _town_centers_d.is_empty() or current_course.is_empty():
+		return 0.0
+	var total := float(current_course.get("length_m", 0.0))
+	if total <= 0.0:
+		return 0.0
+	var d := fposmod(distance_m, total)
+	var best := INF
+	for c in _town_centers_d:
+		var delta: float = absf(d - float(c))
+		best = minf(best, minf(delta, total - delta))
+	return 1.0 - clampf(best / 140.0, 0.0, 1.0)
 
 
 func _town_spot_clear(pos: Vector3, placed_xz: Array) -> bool:
@@ -2361,7 +2377,7 @@ func _physics_process(delta: float) -> void:
 		var uv := _path_minimap_uv(rp.x, -rp.z)
 		hud.set_minimap_uv(uv.x, uv.y)
 
-	ride_audio.set_speed(velocity_mps)
+	ride_audio.update(velocity_mps, target_power_w, _town_proximity())
 	if not is_racing and GameSession.race_starts_at_unix_s > 0.0:
 		var remaining_s: float = GameSession.race_starts_at_unix_s - Time.get_unix_time_from_system()
 		hud.show_countdown(max(0.0, remaining_s))
@@ -2491,6 +2507,8 @@ func _finish_ride() -> void:
 	_finishing = true
 	is_riding = false
 	ride_audio.finish()
+	if not _is_solo_ride:
+		ride_audio.cheer()  # a race finish gets the crowd
 	# Hand trainer resistance back to flat so the rider isn't left pushing
 	# against the last climb's grade after the ride ends.
 	SensorBridge.release_trainer()
