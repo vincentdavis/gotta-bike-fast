@@ -59,6 +59,10 @@ var _access_valid_until: float = 0.0
 var user_id: String = ""
 var user_email: String = ""
 var user_display_name: String = ""
+# Bumped on every sign-in, handoff and sign-out (not on token renewals), so
+# an answer to a request sent under an earlier login can be recognised and
+# dropped instead of landing in the current one.
+var login_generation: int = 0
 # Why the last session ended, for the menu to explain once (saved with the
 # login, so it survives a reload; take_signed_out_reason() clears it).
 var signed_out_reason: String = ""
@@ -162,7 +166,7 @@ func login(email: String, password: String) -> Dictionary:
 		{"email": email, "password": password, "client": client_kind()}, web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
-		_set_signed_out_reason("")
+		_clear_signed_out_reason()
 		_set_tokens_from_response(result["json"])
 		# Defense in depth: a display_name equal to the password is a leaked
 		# credential (historically a password manager autofilling the signup
@@ -179,9 +183,8 @@ func login(email: String, password: String) -> Dictionary:
 func exchange_ticket(ticket: String) -> int:
 	"""Website Play / "Join Race" handoff: trade the one-time ticket the site
 	minted for its signed-in user into this game's login, replacing any login
-	saved before (the game must be the same account as the site). The server
-	ends the replaced login's session. A refused ticket leaves the saved
-	login alone.
+	saved before (the game must be the same account as the site). A refused
+	ticket leaves the saved login alone.
 
 	Returns 200 on success, else the HTTP status (410 = ticket expired, 401 =
 	invalid) or 0 when the server couldn't be reached."""
@@ -189,11 +192,10 @@ func exchange_ticket(ticket: String) -> int:
 		return 401
 	var result: Dictionary = await _do_request(
 		"POST", "/api/auth/exchange-ticket",
-		{"ticket": ticket, "client": client_kind(), "replaces": _refresh_token},
-		web_url
+		{"ticket": ticket, "client": client_kind()}, web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
-		_set_signed_out_reason("")
+		_clear_signed_out_reason()
 		_set_tokens_from_response(result["json"])
 		return 200
 	return int(result["response_code"])
@@ -275,7 +277,10 @@ func _fallback_login_url(target_path: String) -> String:
 
 
 func logout() -> void:
-	# Forget the saved login locally (see sign_out() for the Log out button).
+	# Forget the login locally (see sign_out() for the Log out button). The
+	# browser build's tabs share auth.cfg: if another tab has saved a newer
+	# login there meanwhile, leave it be and only drop ours.
+	var dropped := _refresh_token
 	var was_signed_in := not _access_token.is_empty() or not user_id.is_empty()
 	_access_token = ""
 	_refresh_token = ""
@@ -283,9 +288,19 @@ func logout() -> void:
 	user_id = ""
 	user_email = ""
 	user_display_name = ""
-	_save_auth()
+	login_generation += 1
+	var saved := _saved_refresh_token()
+	if saved.is_empty() or saved == dropped:
+		_save_auth()
 	if was_signed_in:
 		account_changed.emit()
+
+
+func _saved_refresh_token() -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load(AUTH_FILE) != OK:
+		return ""
+	return str(cfg.get_value("auth", "refresh_token", ""))
 
 
 func sign_out() -> void:
@@ -293,7 +308,7 @@ func sign_out() -> void:
 	website's list of game sign-ins stays true. Local state clears at once;
 	the server call is best-effort."""
 	var refresh := _refresh_token
-	_set_signed_out_reason("")
+	_clear_signed_out_reason()
 	logout()
 	if not refresh.is_empty():
 		await _do_request(
@@ -303,14 +318,19 @@ func sign_out() -> void:
 
 func take_signed_out_reason() -> String:
 	var reason := signed_out_reason
-	if not reason.is_empty():
-		_set_signed_out_reason("")
+	_clear_signed_out_reason()
 	return reason
 
 
-func _set_signed_out_reason(reason: String) -> void:
-	signed_out_reason = reason
-	_save_auth()
+func _clear_signed_out_reason() -> void:
+	# Touch only that key: another tab may have saved a newer login.
+	if signed_out_reason.is_empty():
+		return
+	signed_out_reason = ""
+	var cfg := ConfigFile.new()
+	if cfg.load(AUTH_FILE) == OK:
+		cfg.set_value("session", "signed_out_reason", "")
+		cfg.save(AUTH_FILE)
 
 
 func _end_session(reason: String) -> void:
@@ -319,7 +339,10 @@ func _end_session(reason: String) -> void:
 
 
 func get_me() -> Dictionary:
+	var generation := login_generation
 	var result: Dictionary = await _do_request("GET", "/api/users/me", null, web_url)
+	if generation != login_generation:
+		return {}  # asked about a login we no longer hold
 	if result["ok"] and result["json"] is Dictionary:
 		_set_user_from_dict(result["json"])
 		_save_auth()
@@ -372,6 +395,7 @@ func get_rider(rider_id: String) -> Dictionary:
 func _set_tokens_from_response(data: Dictionary) -> void:
 	var tokens: Dictionary = data.get("tokens", {})
 	var previous_user := user_id if not _access_token.is_empty() else ""
+	login_generation += 1
 	_set_access_token(str(tokens.get("access_token", "")))
 	_refresh_token = str(tokens.get("refresh_token", ""))
 	_set_user_from_dict(data.get("user", {}))

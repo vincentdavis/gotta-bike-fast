@@ -72,9 +72,6 @@ var _account_status: Label
 var _account_notice := ""
 # True while startup asks the server whether the saved login still stands.
 var _checking_session := false
-# One-shot: keep the Account tab open (its notice matters) instead of
-# jumping to Ride when a rider gets auto-selected.
-var _stay_on_account := false
 var _settings_tab: Control
 
 # Status tab
@@ -186,6 +183,7 @@ func _handle_web_handoff(deep_link: Dictionary) -> void:
 			return
 		if ApiClient.user_id != previous_user:
 			GameSession.clear_rider()  # that rider belongs to the other account
+		_account_notice = ""
 	elif ApiClient.is_authenticated():
 		# A race link without a ticket uses the saved login, if it still stands.
 		var state: int = await ApiClient.validate_session()
@@ -609,13 +607,12 @@ func _on_handoff_failed(message: String) -> void:
 	_settings_tab.load_user()
 	if ApiClient.is_authenticated():
 		_apply_auth_state()
-		_load_riders()
+		_load_riders(false)  # keep the Account tab (and its notice) open
 		_fetch_user_async()
 	else:
 		ApiClient.take_signed_out_reason()
 		_on_signed_out()
 	_show_account_notice(message)
-	_stay_on_account = true
 	_tabs.current_tab = TAB_ACCOUNT
 
 
@@ -808,21 +805,22 @@ func _show_signed_out_reason() -> void:
 
 # --- Rider tab ---
 
-func _load_riders() -> void:
+func _load_riders(switch_to_ride := true) -> void:
 	if not ApiClient.is_authenticated():
 		return
 	_rider_status.text = "Loading riders…"
 	_rider_refresh_button.disabled = true
+	var generation := ApiClient.login_generation
 	var riders: Array = await ApiClient.list_riders()
 	_rider_refresh_button.disabled = false
-	if not is_inside_tree() or not ApiClient.is_authenticated():
-		return  # (signed out meanwhile — _on_signed_out cleared the list)
+	if not is_inside_tree() or generation != ApiClient.login_generation:
+		return  # the login changed meanwhile; its own load will follow
 	_rider_status.text = ""
 	_render_riders(riders)
-	_maybe_auto_select_rider(riders)
+	_maybe_auto_select_rider(riders, switch_to_ride)
 
 
-func _maybe_auto_select_rider(riders: Array) -> void:
+func _maybe_auto_select_rider(riders: Array, switch_to_ride := true) -> void:
 	# Land the player on the Ride tab: when nothing is selected yet (a fresh
 	# launch), auto-pick a rider. Prefer the default "Got A Ride", else the
 	# first in the list. _select_rider unlocks Ride/Garage and switches to the
@@ -834,7 +832,7 @@ func _maybe_auto_select_rider(riders: Array) -> void:
 		if str(r.get("display_name", "")) == "Got A Ride":
 			pick = r
 			break
-	_select_rider(pick)
+	_select_rider(pick, switch_to_ride)
 
 
 func _render_riders(riders: Array) -> void:
@@ -921,9 +919,10 @@ func _rider_loadout_line(rider: Dictionary) -> String:
 	return "Bike: %s · Wheels: %s · Tires: %s" % [b, w, t]
 
 
-func _select_rider(rider: Dictionary) -> void:
+func _select_rider(rider: Dictionary, switch_to_ride := true) -> void:
 	if _busy or not ApiClient.is_authenticated():
 		return
+	var generation := ApiClient.login_generation
 	GameSession.set_rider(rider)
 	# Close out any rides left active by a prior crash / force-quit for
 	# this rider so "My Rides" reflects truth immediately.
@@ -931,8 +930,10 @@ func _select_rider(rider: Dictionary) -> void:
 	await _auto_finalize_active(str(rider.get("id", "")))
 	if not is_inside_tree():
 		return
-	if not ApiClient.is_authenticated():
-		GameSession.clear_rider()
+	if generation != ApiClient.login_generation:
+		# Another login took over meanwhile; this rider isn't its to use.
+		if GameSession.rider_id == str(rider.get("id", "")):
+			GameSession.clear_rider()
 		_rider_status.text = ""
 		return
 	_rider_status.text = "Riding as %s" % GameSession.rider_display_name
@@ -942,8 +943,7 @@ func _select_rider(rider: Dictionary) -> void:
 	_render_garage()
 	_tabs.set_tab_disabled(TAB_RIDE, false)
 	_tabs.set_tab_disabled(TAB_GARAGE, false)
-	if _stay_on_account:
-		_stay_on_account = false
+	if not switch_to_ride:
 		return
 	# Switching to Ride fires tab_changed → _load_my_races(); only load
 	# explicitly when we're already on Ride (no tab_changed, so no load).

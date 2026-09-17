@@ -210,6 +210,7 @@ func load_user() -> void:
 		return  # the account changed while this was loading
 	if user.is_empty():
 		status_label.text = "Could not load user"
+		save_button.disabled = false  # pressing Save retries the load
 		return
 	_user = user
 	save_button.disabled = false
@@ -237,7 +238,10 @@ func _on_save() -> void:
 		"music_volume": float(music_input.value),
 		"sfx_volume": float(sfx_input.value),
 	}
+	var generation := _load_generation
 	var updated: Dictionary = await ApiClient.update_me({"preferences": prefs})
+	if generation != _load_generation or not is_inside_tree():
+		return  # the account changed (or signed out) meanwhile
 	save_button.disabled = false
 	if updated.is_empty():
 		status_label.text = "Save failed"
