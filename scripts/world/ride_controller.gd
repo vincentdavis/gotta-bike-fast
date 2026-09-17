@@ -56,6 +56,8 @@ var _town_centers_d: Array = []
 var is_riding: bool = false
 var is_racing: bool = false  # false during the pre-race pen (game mode only)
 var _is_solo_ride: bool = false  # solo vs. multiplayer game — gates Game Speed
+# The ride never started (server problem): Esc / the finish tap go back.
+var _start_failed: bool = false
 var _game_speed: float = 1.0     # ride time-scale (GraphicsSettings.game_speed)
 var _finishing: bool = false
 var target_power_w: float = STARTING_POWER_W
@@ -204,6 +206,8 @@ func _ready() -> void:
 	if GraphicsSettings.quality != GraphicsSettings.Quality.LOW:
 		add_child(BellevillePost.new())
 	hud.apply_appearance()
+	# A login ended from the website (or another device) mid-ride.
+	ApiClient.auth_expired.connect(_on_auth_expired)
 	# Road, markers, scenery depend on the chosen course — built post-pick
 	# inside _start_solo / _start_game via _build_course_visuals().
 	if GameSession.is_solo:
@@ -2344,7 +2348,7 @@ func _start_solo() -> void:
 		"",    # no race code
 	)
 	if ride.is_empty():
-		hud.set_status("Failed to start ride")
+		_on_start_failed()
 		return
 	current_ride_id = str(ride["id"])
 	_open_local_jsonl()
@@ -2415,7 +2419,7 @@ func _start_game() -> void:
 		GameSession.code,  # race code
 	)
 	if ride.is_empty():
-		hud.set_status("Failed to start ride")
+		_on_start_failed()
 		return
 	current_ride_id = str(ride["id"])
 	_open_local_jsonl()
@@ -2531,6 +2535,31 @@ func _notification(what: int) -> void:
 		)
 
 
+func _on_start_failed() -> void:
+	if not ApiClient.is_authenticated():
+		# The login was ended elsewhere; the menu explains why.
+		hud.set_status("Signed out — returning to the menu…")
+		await get_tree().create_timer(2.5).timeout
+		_back_to_menu()
+		return
+	_start_failed = true
+	hud.set_status("Failed to start ride — press Esc to go back")
+
+
+func _on_auth_expired() -> void:
+	if is_riding:
+		hud.show_toast("Signed out — this ride won't be saved to your account")
+
+
+func _back_to_menu() -> void:
+	if not is_inside_tree():
+		return
+	if not GameSession.is_solo:
+		WorldClient.disconnect_now()
+		GameSession.reset()
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+
 func _input(event: InputEvent) -> void:
 	# Camera switching works whenever the rig exists — including the pre-race
 	# pen — so a player can frame their shot before the gun.
@@ -2541,6 +2570,10 @@ func _input(event: InputEvent) -> void:
 			GraphicsSettings.set_sound_enabled(not GraphicsSettings.sound_enabled)
 			hud.show_toast("🔊 Sound on" if GraphicsSettings.sound_enabled else "🔇 Sound off")
 			return
+	if _start_failed and event is InputEventKey and event.pressed \
+			and event.keycode == KEY_ESCAPE:
+		_back_to_menu()
+		return
 	if not is_riding:
 		return
 	if event is InputEventKey and event.pressed:
@@ -2569,6 +2602,8 @@ func _on_touch_finish_tap() -> void:
 	# The HUD already demanded a confirming second tap.
 	if is_riding:
 		_finish_ride()
+	elif _start_failed:
+		_back_to_menu()
 
 
 func _effective_game_speed() -> float:

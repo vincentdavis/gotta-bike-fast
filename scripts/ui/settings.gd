@@ -26,6 +26,10 @@ extends Control
 @onready var back_button: Button = $Margin/Scroll/VBox/ButtonRow/BackButton
 
 var _user: Dictionary = {}
+# The menu embeds this screen and loads the account once sign-in has settled;
+# opened on its own, it loads straight away.
+var auto_load_user := true
+var _load_generation := 0
 
 
 func _ready() -> void:
@@ -40,7 +44,10 @@ func _ready() -> void:
 
 	_setup_graphics_controls()
 	_render_rider_summary()
-	_load_user()
+	# Another account (or none) must never keep showing — or being saved.
+	ApiClient.account_changed.connect(load_user)
+	if auto_load_user:
+		load_user()
 
 
 # Menu UI size — built in code so it sits next to Units. Live-applied via
@@ -188,12 +195,24 @@ func _render_rider_summary() -> void:
 	]
 
 
-func _load_user() -> void:
+func load_user() -> void:
+	_load_generation += 1
+	var generation := _load_generation
+	_user = {}
+	save_button.disabled = true
+	if not ApiClient.is_authenticated():
+		email_label.text = "Not signed in"
+		status_label.text = ""
+		return
 	status_label.text = "Loading…"
-	_user = await ApiClient.get_me()
-	if _user.is_empty():
+	var user: Dictionary = await ApiClient.get_me()
+	if generation != _load_generation or not is_inside_tree():
+		return  # the account changed while this was loading
+	if user.is_empty():
 		status_label.text = "Could not load user"
 		return
+	_user = user
+	save_button.disabled = false
 	email_label.text = (
 		"Account: %s · tier %s"
 		% [str(_user.get("email", "?")), str(_user.get("tier", "free"))]
@@ -206,6 +225,9 @@ func _load_user() -> void:
 
 
 func _on_save() -> void:
+	if _user.is_empty() or str(_user.get("id", "")) != ApiClient.user_id:
+		load_user()  # these preferences belong to another account (or none)
+		return
 	save_button.disabled = true
 	status_label.text = "Saving…"
 	# Only game-side preferences travel through here. Rider profile fields

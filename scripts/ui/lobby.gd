@@ -50,6 +50,8 @@ func _ready() -> void:
 	WorldClient.lobby_update.connect(_on_lobby_update)
 	WorldClient.countdown_started.connect(_on_countdown_started)
 	WorldClient.race_ended.connect(_on_race_ended)
+	WorldClient.disconnected.connect(_on_disconnected)
+	ApiClient.auth_expired.connect(_on_signed_out)
 	WorldClient.connect_to_game(GameSession.code, GameSession.rider_id)
 
 
@@ -85,6 +87,8 @@ func _exit_tree() -> void:
 		WorldClient.countdown_started.disconnect(_on_countdown_started)
 	if WorldClient.race_ended.is_connected(_on_race_ended):
 		WorldClient.race_ended.disconnect(_on_race_ended)
+	if WorldClient.disconnected.is_connected(_on_disconnected):
+		WorldClient.disconnected.disconnect(_on_disconnected)
 
 
 func _render_participants(participants: Array) -> void:
@@ -114,6 +118,25 @@ func _on_race_ended(reason: String) -> void:
 	status_label.text = "Game ended: %s" % reason
 	# Bounce back to menu after a moment.
 	await get_tree().create_timer(1.5).timeout
+	if is_inside_tree():
+		WorldClient.disconnect_now()
+		GameSession.reset()
+		get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+
+func _on_disconnected() -> void:
+	if not ApiClient.is_authenticated():
+		_on_signed_out()
+	else:
+		status_label.text = "Lost the connection to the race — press Leave, then join again."
+
+
+func _on_signed_out() -> void:
+	# The login was ended elsewhere (website logout, another device); the menu
+	# explains why.
+	start_button.disabled = true
+	status_label.text = "Signed out — returning to the menu…"
+	await get_tree().create_timer(2.0).timeout
 	if is_inside_tree():
 		WorldClient.disconnect_now()
 		GameSession.reset()

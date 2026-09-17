@@ -67,8 +67,15 @@ var _account_root: VBoxContainer
 var _email_input: LineEdit
 var _password_input: LineEdit
 var _account_status: Label
+# Shown under the Account tab (why you were signed out, a failed handoff…);
+# kept here so rebuilding the tab doesn't lose it.
+var _account_notice := ""
 # True while startup asks the server whether the saved login still stands.
 var _checking_session := false
+# One-shot: keep the Account tab open (its notice matters) instead of
+# jumping to Ride when a rider gets auto-selected.
+var _stay_on_account := false
+var _settings_tab: Control
 
 # Status tab
 var _env_label: Label
@@ -108,6 +115,7 @@ func _ready() -> void:
 		_resume_saved_login()
 	else:
 		_show_signed_out_reason()  # e.g. the session ended during a ride
+		_settings_tab.load_user()
 
 
 func _resume_saved_login() -> void:
@@ -119,6 +127,7 @@ func _resume_saved_login() -> void:
 	_checking_session = false
 	if not is_inside_tree():
 		return
+	_settings_tab.load_user()
 	if state == ApiClient.Session.ENDED:
 		_on_signed_out()
 		return
@@ -133,7 +142,7 @@ func _resume_saved_login() -> void:
 
 func _fetch_user_async() -> void:
 	await ApiClient.get_me()
-	if is_inside_tree():
+	if is_inside_tree() and ApiClient.is_authenticated():
 		_update_header_identity()
 		_rebuild_account_tab()
 
@@ -173,10 +182,7 @@ func _handle_web_handoff(deep_link: Dictionary) -> void:
 		if not is_inside_tree():
 			return
 		if status != 200:
-			# Never fall back to a login saved earlier — it may be someone else.
-			ApiClient.logout()
-			ApiClient.signed_out_reason = _handoff_error(status, not code.is_empty())
-			_on_signed_out()
+			await _on_handoff_failed(_handoff_error(status, not code.is_empty()))
 			return
 		if ApiClient.user_id != previous_user:
 			GameSession.clear_rider()  # that rider belongs to the other account
@@ -186,9 +192,11 @@ func _handle_web_handoff(deep_link: Dictionary) -> void:
 		if not is_inside_tree():
 			return
 		if state == ApiClient.Session.ENDED:
+			_settings_tab.load_user()
 			_on_signed_out()
 			return
 
+	_settings_tab.load_user()
 	_apply_auth_state()
 	if not ApiClient.is_authenticated():
 		_load_riders()  # not signed in — the normal menu (login form)
@@ -486,6 +494,10 @@ func _build_settings_tab() -> Control:
 	# meaningless here (the tab bar is the navigation), so hide it.
 	var inst: Control = load("res://scenes/settings.tscn").instantiate()
 	inst.name = "Settings"
+	# The menu loads the account into it once sign-in has settled (startup
+	# check / website handoff), so it never shows or saves another account's.
+	inst.auto_load_user = false
+	_settings_tab = inst
 	var back := inst.get_node_or_null("Margin/Scroll/VBox/ButtonRow/BackButton")
 	if back != null:
 		back.visible = false
@@ -581,6 +593,32 @@ func _apply_auth_state() -> void:
 		_tabs.current_tab = TAB_RIDE
 
 
+func _on_handoff_failed(message: String) -> void:
+	# The website's sign-in didn't take. Keep any login saved here (a bad or
+	# stale link must not wipe it) but say plainly who that is, since it may
+	# not be the website's account — and don't carry on into a race as them.
+	if ApiClient.is_authenticated():
+		var state: int = await ApiClient.validate_session()
+		if not is_inside_tree():
+			return
+		if state != ApiClient.Session.ENDED:
+			ApiClient.take_signed_out_reason()
+			message += "\nStill signed in here as %s — log out below if that isn't you." % (
+				ApiClient.user_label()
+			)
+	_settings_tab.load_user()
+	if ApiClient.is_authenticated():
+		_apply_auth_state()
+		_load_riders()
+		_fetch_user_async()
+	else:
+		ApiClient.take_signed_out_reason()
+		_on_signed_out()
+	_show_account_notice(message)
+	_stay_on_account = true
+	_tabs.current_tab = TAB_ACCOUNT
+
+
 func _handoff_error(status: int, is_race: bool) -> String:
 	var again := "press Join again" if is_race else "press Play again"
 	match status:
@@ -617,6 +655,19 @@ func _rebuild_account_tab() -> void:
 		_build_signed_in_view()
 	else:
 		_build_login_form()
+
+	_account_status = Label.new()
+	_account_status.add_theme_font_size_override("font_size", 14)
+	_account_status.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
+	_account_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_account_status.text = _account_notice
+	_account_root.add_child(_account_status)
+
+
+func _show_account_notice(text: String) -> void:
+	_account_notice = text
+	if _account_status != null and is_instance_valid(_account_status):
+		_account_status.text = text
 
 
 func _build_signed_in_view() -> void:
@@ -694,10 +745,6 @@ func _build_login_form() -> void:
 	reset.pressed.connect(func() -> void: OS.shell_open(ApiClient.web_password_reset_url()))
 	button_row.add_child(reset)
 
-	_account_status = Label.new()
-	_account_status.add_theme_font_size_override("font_size", 14)
-	_account_status.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
-	_account_root.add_child(_account_status)
 
 
 func _on_login_submit() -> void:
@@ -706,9 +753,9 @@ func _on_login_submit() -> void:
 	var email := _email_input.text.strip_edges()
 	var password := _password_input.text
 	if email.is_empty() or password.is_empty():
-		_account_status.text = "Email and password required"
+		_show_account_notice("Email and password required")
 		return
-	_account_status.text = "Signing in…"
+	_show_account_notice("Signing in…")
 	var result: Dictionary = await ApiClient.login(email, password)
 	# The password has done its job — don't keep it sitting in memory or the
 	# input box after authenticating.
@@ -717,15 +764,17 @@ func _on_login_submit() -> void:
 		_password_input.text = ""
 	if result.is_empty():
 		if is_inside_tree():
-			_account_status.text = "Invalid email or password"
+			_show_account_notice("Invalid email or password")
 		return
 	# Fresh login → drop any cached rider so the list reflects this user.
+	_account_notice = ""
 	GameSession.clear_rider()
 	_apply_auth_state()
 	_load_riders()
 
 
 func _on_logout_pressed() -> void:
+	_account_notice = ""
 	ApiClient.sign_out()  # clears the local login now; tells the server async
 	GameSession.clear_rider()
 	GameSession.reset()
@@ -751,12 +800,10 @@ func _on_signed_out() -> void:
 
 func _show_signed_out_reason() -> void:
 	# Explain once why we're signed out (ApiClient keeps the reason across
-	# scenes, e.g. a session that ended mid-ride).
-	if ApiClient.signed_out_reason.is_empty():
-		return
-	if _account_status != null and is_instance_valid(_account_status):
-		_account_status.text = ApiClient.signed_out_reason
-		ApiClient.signed_out_reason = ""
+	# scenes and reloads, e.g. a session that ended mid-ride).
+	var reason := ApiClient.take_signed_out_reason()
+	if not reason.is_empty():
+		_show_account_notice(reason)
 
 
 # --- Rider tab ---
@@ -768,8 +815,8 @@ func _load_riders() -> void:
 	_rider_refresh_button.disabled = true
 	var riders: Array = await ApiClient.list_riders()
 	_rider_refresh_button.disabled = false
-	if not is_inside_tree():
-		return
+	if not is_inside_tree() or not ApiClient.is_authenticated():
+		return  # (signed out meanwhile — _on_signed_out cleared the list)
 	_rider_status.text = ""
 	_render_riders(riders)
 	_maybe_auto_select_rider(riders)
@@ -875,7 +922,7 @@ func _rider_loadout_line(rider: Dictionary) -> String:
 
 
 func _select_rider(rider: Dictionary) -> void:
-	if _busy:
+	if _busy or not ApiClient.is_authenticated():
 		return
 	GameSession.set_rider(rider)
 	# Close out any rides left active by a prior crash / force-quit for
@@ -884,6 +931,10 @@ func _select_rider(rider: Dictionary) -> void:
 	await _auto_finalize_active(str(rider.get("id", "")))
 	if not is_inside_tree():
 		return
+	if not ApiClient.is_authenticated():
+		GameSession.clear_rider()
+		_rider_status.text = ""
+		return
 	_rider_status.text = "Riding as %s" % GameSession.rider_display_name
 	# Re-render the list so the active marker moves, refresh the garage,
 	# unlock the Ride + Garage tabs, and jump the user to Ride.
@@ -891,6 +942,9 @@ func _select_rider(rider: Dictionary) -> void:
 	_render_garage()
 	_tabs.set_tab_disabled(TAB_RIDE, false)
 	_tabs.set_tab_disabled(TAB_GARAGE, false)
+	if _stay_on_account:
+		_stay_on_account = false
+		return
 	# Switching to Ride fires tab_changed → _load_my_races(); only load
 	# explicitly when we're already on Ride (no tab_changed, so no load).
 	var was_on_ride := _tabs.current_tab == TAB_RIDE

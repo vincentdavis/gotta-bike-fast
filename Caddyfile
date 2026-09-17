@@ -16,7 +16,9 @@
 	# so the browser can stream-compile it.
 	@wasm path *.wasm
 	header @wasm Content-Type application/wasm
-	# Short cache: assets aren't content-hashed, so a redeploy should show up
-	# soon without forcing a re-download every visit.
-	header Cache-Control "public, max-age=3600"
+	# Assets aren't content-hashed, so browsers must revalidate every load
+	# (a cheap 304 via the ETag): a cached older build would otherwise keep
+	# running for a while after a deploy, e.g. ignoring the website's Play
+	# sign-in handoff.
+	header Cache-Control "no-cache"
 }

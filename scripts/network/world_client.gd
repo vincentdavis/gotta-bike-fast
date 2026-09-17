@@ -45,9 +45,13 @@ func connect_to_game(code: String, rider_id: String, ride_id: String = "") -> vo
 	# The relay checks the token only when the socket opens, and it can't go
 	# through ApiClient's refresh-and-retry, so renew it first if it's close
 	# to expiring (access tokens are short-lived).
-	await ApiClient.ensure_fresh_access_token()
+	var token_ok: bool = await ApiClient.ensure_fresh_access_token()
 	if generation != _connect_generation:
 		return  # disconnected, or a newer connect started, while we waited
+	if not token_ok:
+		# Signed out: the relay would refuse the socket anyway.
+		disconnected.emit()
+		return
 	_peer = WebSocketPeer.new()
 	var url := "%s/ws/game/%s?rider_id=%s" % [ws_url, code, rider_id]
 	if not ride_id.is_empty():
