@@ -36,9 +36,33 @@ WORKDIR /src
 COPY . .
 # Import (generates .godot/), then export. Precompress the big binaries so Caddy
 # can serve them gzip-encoded.
-RUN godot --headless --path . --import . 2>&1 | tail -3 || true
+#
+# There's no Blender in this image, and with .blend import on, a single .blend
+# in the project makes Godot's headless import skip EVERYTHING ("Cannot
+# configure blender path in headless mode") yet still exit 0 — the web build
+# then shipped without any imported textures. So .blend import is off in this
+# copy, and the build checks that every import output exists rather than
+# trusting the exit code (a fresh project's first import may also exit
+# non-zero, as in CI — hence two passes).
+RUN printf '\n[filesystem]\n\nimport/blender/enabled=false\n' >> project.godot \
+    && { godot --headless --path . --import . > /tmp/import.log 2>&1; \
+         godot --headless --path . --import . >> /tmp/import.log 2>&1; true; } \
+    && find . -name '*.import' -not -path './.godot/*' > /tmp/imports.txt \
+    && missing=0 \
+    && while read -r imp; do \
+         for dest in $(sed -n 's/^dest_files=\[\(.*\)\]$/\1/p' "$imp" | tr -d '" ' | tr ',' ' '); do \
+           [ -s "${dest#res://}" ] || { echo "missing import output: $dest ($imp)"; missing=1; }; \
+         done; \
+       done < /tmp/imports.txt \
+    && echo "checked $(wc -l < /tmp/imports.txt) .import files" \
+    && { grep -E "ERROR|WARNING" /tmp/import.log | head -40; true; } \
+    && [ "$missing" = 0 ]
+# The export also exits 0 when a resource fails to load, so check its log too.
 RUN mkdir -p build/web \
-    && godot --headless --path . --export-release "Web" build/web/index.html \
+    && { godot --headless --path . --export-release "Web" build/web/index.html > /tmp/export.log 2>&1 \
+         || { tail -40 /tmp/export.log; exit 1; }; } \
+    && { grep -E "ERROR|WARNING" /tmp/export.log | head -40; true; } \
+    && ! grep -qE "Failed loading resource|Can't open file|Unable to open file" /tmp/export.log \
     && gzip -9 -k build/web/index.wasm build/web/index.pck build/web/index.js \
     && ls -lh build/web
 

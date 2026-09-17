@@ -10,3 +10,6 @@ android/
 *.md
 export_credentials.cfg
 .DS_Store
+# Blender working files (untracked, not game assets). The image has no
+# Blender, and a .blend here made the headless import skip everything.
+art/
