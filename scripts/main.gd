@@ -67,6 +67,8 @@ var _account_root: VBoxContainer
 var _email_input: LineEdit
 var _password_input: LineEdit
 var _account_status: Label
+# True while startup asks the server whether the saved login still stands.
+var _checking_session := false
 
 # Status tab
 var _env_label: Label
@@ -94,20 +96,39 @@ func _ready() -> void:
 	_refresh_status()
 	_apply_auth_state()
 
-	# Web "Join Race" deep link (/?ticket=…&race=CODE): sign in via the one-time
-	# ticket and drop straight into that race. Owns the post-auth flow itself.
+	# Website handoff (web build): Play (/?ticket=…) or "Join Race"
+	# (/?ticket=…&race=CODE) signs in as the website's user; a race link also
+	# drops straight into that race. Owns the post-auth flow itself.
 	var deep_link := _read_web_deep_link()
-	if not str(deep_link.get("race", "")).is_empty():
-		_handle_join_deep_link(deep_link)
+	if deep_link.has("ticket") or not str(deep_link.get("race", "")).is_empty():
+		_handle_web_handoff(deep_link)
 		return
 
 	if ApiClient.is_authenticated():
-		_load_riders()
-		# Always refresh the profile on boot: the header + auth.cfg cache
-		# display_name, and a server-side correction (e.g. the scrub of
-		# display names that were actually passwords) must propagate here
-		# without requiring a re-login.
-		_fetch_user_async()
+		_resume_saved_login()
+	else:
+		_show_signed_out_reason()  # e.g. the session ended during a ride
+
+
+func _resume_saved_login() -> void:
+	# The saved login may have been ended from the website (logout there,
+	# "Sign out of all devices", a password change): ask before trusting it.
+	_checking_session = true
+	_update_header_identity()
+	var state: int = await ApiClient.validate_session()
+	_checking_session = false
+	if not is_inside_tree():
+		return
+	if state == ApiClient.Session.ENDED:
+		_on_signed_out()
+		return
+	_update_header_identity()
+	_load_riders()
+	# Always refresh the profile on boot: the header + auth.cfg cache
+	# display_name, and a server-side correction (e.g. the scrub of
+	# display names that were actually passwords) must propagate here
+	# without requiring a re-login.
+	_fetch_user_async()
 
 
 func _fetch_user_async() -> void:
@@ -139,22 +160,43 @@ func _clear_web_query() -> void:
 		JavaScriptBridge.eval("window.history.replaceState({}, '', window.location.pathname)")
 
 
-func _handle_join_deep_link(deep_link: Dictionary) -> void:
+func _handle_web_handoff(deep_link: Dictionary) -> void:
 	var code := str(deep_link.get("race", "")).strip_edges().to_upper()
 	var ticket := str(deep_link.get("ticket", ""))
 	_clear_web_query()
 
-	# 1. Sign in via the one-time ticket (if the website provided one).
+	# 1. Sign in as the website's user. The ticket replaces any saved login:
+	# the game must be the same account as the site that sent us here.
 	if not ticket.is_empty():
-		await ApiClient.exchange_ticket(ticket)
+		var previous_user := ApiClient.user_id
+		var status: int = await ApiClient.exchange_ticket(ticket)
 		if not is_inside_tree():
+			return
+		if status != 200:
+			# Never fall back to a login saved earlier — it may be someone else.
+			ApiClient.logout()
+			ApiClient.signed_out_reason = _handoff_error(status, not code.is_empty())
+			_on_signed_out()
+			return
+		if ApiClient.user_id != previous_user:
+			GameSession.clear_rider()  # that rider belongs to the other account
+	elif ApiClient.is_authenticated():
+		# A race link without a ticket uses the saved login, if it still stands.
+		var state: int = await ApiClient.validate_session()
+		if not is_inside_tree():
+			return
+		if state == ApiClient.Session.ENDED:
+			_on_signed_out()
 			return
 
 	_apply_auth_state()
 	if not ApiClient.is_authenticated():
-		_load_riders()  # couldn't sign in — fall back to the normal menu
+		_load_riders()  # not signed in — the normal menu (login form)
 		return
 	_fetch_user_async()
+	if code.is_empty():
+		_load_riders()  # Play: just the signed-in menu
+		return
 
 	# 2. Find which of the user's riders is in this race, then enter as them.
 	var riders: Array = await ApiClient.list_riders()
@@ -539,8 +581,21 @@ func _apply_auth_state() -> void:
 		_tabs.current_tab = TAB_RIDE
 
 
+func _handoff_error(status: int, is_race: bool) -> String:
+	var again := "press Join again" if is_race else "press Play again"
+	match status:
+		410:
+			return "That sign-in link expired — go back to the website and %s." % again
+		0:
+			return "Couldn't reach the server to sign you in. Check your connection, then %s on the website." % again
+	return "Couldn't sign you in from the website — go back and %s, or sign in here." % again
+
+
 func _update_header_identity() -> void:
-	if ApiClient.is_authenticated():
+	if _checking_session:
+		_header_identity.text = "● checking sign-in…"
+		_header_identity.add_theme_color_override("font_color", MenuTheme.INK_MUTED)
+	elif ApiClient.is_authenticated():
 		_header_identity.text = "● %s" % ApiClient.user_label()
 		_header_identity.add_theme_color_override("font_color", DOT_OK)
 	else:
@@ -671,7 +726,7 @@ func _on_login_submit() -> void:
 
 
 func _on_logout_pressed() -> void:
-	ApiClient.logout()
+	ApiClient.sign_out()  # clears the local login now; tells the server async
 	GameSession.clear_rider()
 	GameSession.reset()
 	_render_riders([])
@@ -679,16 +734,29 @@ func _on_logout_pressed() -> void:
 
 
 func _on_auth_expired() -> void:
-	# The cached session is fully expired (access + refresh both dead).
-	# ApiClient has already cleared its tokens; mirror that here so the
-	# page drops cleanly to the login form instead of showing "signed
-	# in" with an empty rider list.
+	# The server refused the saved login (expired, or ended from the
+	# website). ApiClient has already cleared its tokens.
+	_on_signed_out()
+
+
+func _on_signed_out() -> void:
+	# Mirror a cleared login so the page drops cleanly to the login form
+	# instead of showing "signed in" with an empty rider list.
 	GameSession.clear_rider()
 	GameSession.reset()
 	_render_riders([])
 	_apply_auth_state()
+	_show_signed_out_reason()
+
+
+func _show_signed_out_reason() -> void:
+	# Explain once why we're signed out (ApiClient keeps the reason across
+	# scenes, e.g. a session that ended mid-ride).
+	if ApiClient.signed_out_reason.is_empty():
+		return
 	if _account_status != null and is_instance_valid(_account_status):
-		_account_status.text = "Your session expired — please sign in again."
+		_account_status.text = ApiClient.signed_out_reason
+		ApiClient.signed_out_reason = ""
 
 
 # --- Rider tab ---

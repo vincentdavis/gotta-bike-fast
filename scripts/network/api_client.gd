@@ -10,12 +10,27 @@ signal healthz_received(ok: bool, body: String)
 # status is one of the Status enum values below.
 signal connection_status_changed(service: String, status: int)
 
-# Fired when an authenticated request gets a 401 AND the refresh token
-# is also dead, so the session is genuinely over. Listeners (the home
-# page) should drop to a logged-out state and show the login form.
+# Fired when an authenticated request gets a 401 AND the server refuses the
+# refresh token too, so the session is genuinely over (expired, or ended from
+# the website: logout there, "Sign out of all devices", a password change).
+# Listeners (the home page) should drop to a logged-out state and show the
+# login form.
 signal auth_expired
 
 enum Status { CONNECTING, OK, OFFLINE }
+
+# Outcome of asking the server whether the saved login still stands.
+enum Session { VALID, ENDED, UNREACHABLE }
+
+enum _Refresh { OK, DENIED, FAILED }
+
+# Auth endpoints never trigger the refresh-and-retry dance: a 401 from them
+# is the answer itself (and a bad website ticket must not log out whoever is
+# signed in via the refresh path).
+const _NO_REFRESH_PATHS := [
+	"/api/auth/login", "/api/auth/refresh", "/api/auth/exchange-ticket",
+	"/api/auth/logout", "/api/discord/token",
+]
 
 const AUTH_FILE := "user://auth.cfg"
 
@@ -31,9 +46,15 @@ var web_status: int = Status.CONNECTING
 
 var _access_token: String = ""
 var _refresh_token: String = ""
+# Local-clock time the access token stops being usable (its own lifetime,
+# counted from when we received it, so a skewed device clock doesn't matter).
+# 0 = unknown (loaded from disk) → treat as stale.
+var _access_valid_until: float = 0.0
 var user_id: String = ""
 var user_email: String = ""
 var user_display_name: String = ""
+# Why the last session ended, for the menu to explain once (then clear).
+var signed_out_reason: String = ""
 
 
 const RECHECK_INTERVAL_S := 3.0
@@ -68,7 +89,53 @@ func _on_recheck_tick() -> void:
 # --- Auth ---
 
 func is_authenticated() -> bool:
+	# Has a saved login. Whether the server still honours it is
+	# validate_session()'s job (the menu asks at startup).
 	return not _access_token.is_empty()
+
+
+func client_kind() -> String:
+	# Tells the server which kind of game session this is: website logout
+	# ends "browser" sessions; "Sign out of all devices" ends both.
+	return "browser" if OS.has_feature("web") else "desktop"
+
+
+func validate_session() -> int:
+	"""Ask the server whether the saved login still stands, renewing it.
+
+	ENDED clears the saved login (signed_out_reason says why); UNREACHABLE
+	keeps it so an offline start doesn't sign anyone out."""
+	if _refresh_token.is_empty():
+		if not _access_token.is_empty():
+			logout()  # a login saved without a refresh token can't be renewed
+		return Session.ENDED
+	var refreshed: int = await _try_refresh()
+	match refreshed:
+		_Refresh.OK:
+			return Session.VALID
+		_Refresh.DENIED:
+			_end_session("Your session ended — please sign in again.")
+			return Session.ENDED
+	return Session.UNREACHABLE
+
+
+func ensure_fresh_access_token(min_valid_s: float = 60.0) -> bool:
+	"""Make sure the access token outlives the next min_valid_s seconds,
+	refreshing it if not. For the WebSocket connect, which carries the token
+	in its URL and can't retry through _do_request's 401 handling."""
+	if _access_token.is_empty():
+		return false
+	if _access_valid_until - Time.get_unix_time_from_system() > min_valid_s:
+		return true
+	var refreshed: int = await _try_refresh()
+	match refreshed:
+		_Refresh.OK:
+			return true
+		_Refresh.DENIED:
+			_end_session("Your session ended — please sign in again.")
+			auth_expired.emit()
+			return false
+	return not _access_token.is_empty()  # offline: try with what we have
 
 
 func get_access_token() -> String:
@@ -80,9 +147,11 @@ func get_access_token() -> String:
 
 func login(email: String, password: String) -> Dictionary:
 	var result: Dictionary = await _do_request(
-		"POST", "/api/auth/login", {"email": email, "password": password}, web_url
+		"POST", "/api/auth/login",
+		{"email": email, "password": password, "client": client_kind()}, web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
+		signed_out_reason = ""
 		_set_tokens_from_response(result["json"])
 		# Defense in depth: a display_name equal to the password is a leaked
 		# credential (historically a password manager autofilling the signup
@@ -96,18 +165,24 @@ func login(email: String, password: String) -> Dictionary:
 	return {}
 
 
-func exchange_ticket(ticket: String) -> bool:
-	# Web "Join Race" deep link: the website minted a one-time ticket for the
-	# logged-in user; trade it for a JWT pair so the browser game is signed in.
+func exchange_ticket(ticket: String) -> int:
+	"""Website Play / "Join Race" handoff: trade the one-time ticket the site
+	minted for its signed-in user into this game's login, replacing any login
+	saved before (the game must be the same account as the site).
+
+	Returns 200 on success, else the HTTP status (410 = ticket expired, 401 =
+	invalid) or 0 when the server couldn't be reached."""
 	if ticket.is_empty():
-		return false
+		return 401
 	var result: Dictionary = await _do_request(
-		"POST", "/api/auth/exchange-ticket", {"ticket": ticket}, web_url
+		"POST", "/api/auth/exchange-ticket",
+		{"ticket": ticket, "client": client_kind()}, web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
+		signed_out_reason = ""
 		_set_tokens_from_response(result["json"])
-		return true
-	return false
+		return 200
+	return int(result["response_code"])
 
 
 func web_signup_url() -> String:
@@ -186,12 +261,32 @@ func _fallback_login_url(target_path: String) -> String:
 
 
 func logout() -> void:
+	# Forget the saved login locally (see sign_out() for the Log out button).
 	_access_token = ""
 	_refresh_token = ""
+	_access_valid_until = 0.0
 	user_id = ""
 	user_email = ""
 	user_display_name = ""
 	_save_auth()
+
+
+func sign_out() -> void:
+	"""The Log out button: end this game session on the server too, so the
+	website's list of game sign-ins stays true. Local state clears at once;
+	the server call is best-effort."""
+	var refresh := _refresh_token
+	logout()
+	signed_out_reason = ""
+	if not refresh.is_empty():
+		await _do_request(
+			"POST", "/api/auth/logout", {"refresh_token": refresh}, web_url, false
+		)
+
+
+func _end_session(reason: String) -> void:
+	logout()
+	signed_out_reason = reason
 
 
 func get_me() -> Dictionary:
@@ -247,36 +342,67 @@ func get_rider(rider_id: String) -> Dictionary:
 
 func _set_tokens_from_response(data: Dictionary) -> void:
 	var tokens: Dictionary = data.get("tokens", {})
-	_access_token = str(tokens.get("access_token", ""))
+	var previous_user := user_id
+	_set_access_token(str(tokens.get("access_token", "")))
 	_refresh_token = str(tokens.get("refresh_token", ""))
 	_set_user_from_dict(data.get("user", {}))
+	if user_id != previous_user:
+		# A different account: its display name/email must not linger.
+		user_email = str(data.get("user", {}).get("email", ""))
+		user_display_name = str(data.get("user", {}).get("display_name", ""))
 	_save_auth()
 
 
-func _try_refresh() -> bool:
-	# Exchange the refresh token for a fresh access token. Called from
-	# _do_request when an authed call 401s. Returns true if we got a new
-	# access token. The /api/auth/refresh response is a bare TokenPair
+func _set_access_token(token: String) -> void:
+	_access_token = token
+	var claims := _token_claims(token)
+	var lifetime := float(claims.get("exp", 0)) - float(claims.get("iat", 0))
+	_access_valid_until = (
+		Time.get_unix_time_from_system() + lifetime if lifetime > 0.0 else 0.0
+	)
+
+
+static func _token_claims(token: String) -> Dictionary:
+	# A JWT's payload is base64url JSON. We only read our own tokens' timing
+	# claims here; the server does all the verifying.
+	var parts := token.split(".")
+	if parts.size() != 3:
+		return {}
+	var b64 := parts[1].replace("-", "+").replace("_", "/")
+	while b64.length() % 4 != 0:
+		b64 += "="
+	var parsed: Variant = JSON.parse_string(Marshalls.base64_to_raw(b64).get_string_from_utf8())
+	return parsed if parsed is Dictionary else {}
+
+
+func _try_refresh() -> int:
+	# Trade the refresh token for a fresh pair. DENIED means the server
+	# refused it (the session is over); FAILED means we couldn't get an
+	# answer (offline, server error), so the saved login stays.
+	# The /api/auth/refresh response is a bare TokenPair
 	# ({access_token, refresh_token}), not wrapped in "tokens", so we
 	# can't reuse _set_tokens_from_response here.
 	if _refresh_token.is_empty():
-		return false
+		return _Refresh.DENIED
 	var result: Dictionary = await _do_request(
 		"POST", "/api/auth/refresh",
 		{"refresh_token": _refresh_token}, web_url, false
 	)
+	var code: int = result["response_code"]
+	if code == 401 or code == 403:
+		return _Refresh.DENIED
 	if not (result["ok"] and result["json"] is Dictionary):
-		return false
+		return _Refresh.FAILED
 	var data: Dictionary = result["json"]
 	var new_access := str(data.get("access_token", ""))
 	if new_access.is_empty():
-		return false
-	_access_token = new_access
+		return _Refresh.FAILED
+	_set_access_token(new_access)
 	var new_refresh := str(data.get("refresh_token", ""))
 	if not new_refresh.is_empty():
 		_refresh_token = new_refresh
 	_save_auth()
-	return true
+	return _Refresh.OK
 
 
 func _save_auth() -> void:
@@ -317,11 +443,10 @@ func ping() -> void:
 
 
 func ping_web() -> void:
-	# Django reachability probe. There's no dedicated healthz on the
-	# Django side, so we hit the auto-generated /api/docs (django-ninja
-	# always exposes it) and treat any 2xx/3xx as alive.
+	# Django reachability probe (its /healthz, which Railway's deploy check
+	# also uses).
 	_set_status("web", Status.CONNECTING)
-	var result: Dictionary = await _do_request("GET", "/api/docs", null, web_url)
+	var result: Dictionary = await _do_request("GET", "/healthz", null, web_url)
 	_set_status("web", Status.OK if result["ok"] else Status.OFFLINE)
 
 
@@ -565,24 +690,25 @@ func _do_request(
 
 	# Auto-recover from an expired access token: if an authed call 401s
 	# and we have a refresh token, swap it for a fresh access token and
-	# retry the original request once. If refresh also fails the session
-	# is genuinely over — clear tokens and let listeners show the login
-	# form. Skipped for the refresh/login endpoints themselves and when
-	# the caller opted out (allow_refresh=false, e.g. the retry itself).
+	# retry the original request once. If the server refuses the refresh
+	# too, the session is genuinely over — clear tokens and let listeners
+	# show the login form (an unreachable server leaves the login alone).
+	# Skipped for the auth endpoints and when the caller opted out
+	# (allow_refresh=false, e.g. the retry itself).
 	if (
 		response_code == 401
 		and allow_refresh
 		and not _access_token.is_empty()
 		and not _refresh_token.is_empty()
-		and path != "/api/auth/refresh"
-		and path != "/api/auth/login"
+		and not _NO_REFRESH_PATHS.has(path)
 	):
-		var refreshed: bool = await _try_refresh()
-		if refreshed:
-			return await _do_request(method, path, body, base, false)
-		# Refresh token dead too — surface a clean logged-out state.
-		logout()
-		auth_expired.emit()
+		var refreshed: int = await _try_refresh()
+		match refreshed:
+			_Refresh.OK:
+				return await _do_request(method, path, body, base, false)
+			_Refresh.DENIED:
+				_end_session("Your session ended — please sign in again.")
+				auth_expired.emit()
 
 	if not ok:
 		push_warning(

@@ -27,6 +27,9 @@ const PING_INTERVAL_S := 30.0
 var _peer: WebSocketPeer = null
 var _last_state: int = WebSocketPeer.STATE_CLOSED
 var _ping_accum: float = 0.0
+# Bumped by every connect/disconnect so a connect still waiting on a token
+# refresh can tell it was superseded.
+var _connect_generation: int = 0
 
 
 func _ready() -> void:
@@ -37,6 +40,14 @@ func connect_to_game(code: String, rider_id: String, ride_id: String = "") -> vo
 	if _peer != null:
 		_peer.close()
 		_peer = null
+	_connect_generation += 1
+	var generation := _connect_generation
+	# The relay checks the token only when the socket opens, and it can't go
+	# through ApiClient's refresh-and-retry, so renew it first if it's close
+	# to expiring (access tokens are short-lived).
+	await ApiClient.ensure_fresh_access_token()
+	if generation != _connect_generation:
+		return  # disconnected, or a newer connect started, while we waited
 	_peer = WebSocketPeer.new()
 	var url := "%s/ws/game/%s?rider_id=%s" % [ws_url, code, rider_id]
 	if not ride_id.is_empty():
@@ -63,6 +74,7 @@ func send_state(state: Dictionary) -> void:
 
 
 func disconnect_now() -> void:
+	_connect_generation += 1
 	if _peer != null:
 		_peer.close()
 
