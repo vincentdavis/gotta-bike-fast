@@ -73,6 +73,9 @@ var _account_notice := ""
 # True while startup asks the server whether the saved login still stands.
 var _checking_session := false
 var _settings_tab: Control
+# Identifies the rider selection in flight, so a slow one can tell it has
+# been superseded (by another selection, or by a new login picking one).
+var _selection_token := 0
 
 # Status tab
 var _env_label: Label
@@ -923,18 +926,20 @@ func _select_rider(rider: Dictionary, switch_to_ride := true) -> void:
 	if _busy or not ApiClient.is_authenticated():
 		return
 	var generation := ApiClient.login_generation
+	_selection_token += 1
+	var token := _selection_token
 	GameSession.set_rider(rider)
 	# Close out any rides left active by a prior crash / force-quit for
 	# this rider so "My Rides" reflects truth immediately.
 	_rider_status.text = "Cleaning up prior rides…"
 	await _auto_finalize_active(str(rider.get("id", "")))
-	if not is_inside_tree():
-		return
+	if not is_inside_tree() or token != _selection_token:
+		return  # a newer selection owns the rider now
 	if generation != ApiClient.login_generation:
 		# Another login took over meanwhile; this rider isn't its to use.
-		if GameSession.rider_id == str(rider.get("id", "")):
-			GameSession.clear_rider()
+		GameSession.clear_rider()
 		_rider_status.text = ""
+		_apply_auth_state()
 		return
 	_rider_status.text = "Riding as %s" % GameSession.rider_display_name
 	# Re-render the list so the active marker moves, refresh the garage,

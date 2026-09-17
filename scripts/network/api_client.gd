@@ -192,7 +192,11 @@ func exchange_ticket(ticket: String) -> int:
 		return 401
 	var result: Dictionary = await _do_request(
 		"POST", "/api/auth/exchange-ticket",
-		{"ticket": ticket, "client": client_kind()}, web_url
+		# `replaces`: the login held right now. The server ends it if it
+		# belongs to someone else, so a tab still holding that account can't
+		# renew it and take this browser's saved login back.
+		{"ticket": ticket, "client": client_kind(), "replaces": _refresh_token},
+		web_url
 	)
 	if result["ok"] and result["json"] is Dictionary:
 		_clear_signed_out_reason()
@@ -276,11 +280,14 @@ func _fallback_login_url(target_path: String) -> String:
 	return login_url
 
 
-func logout() -> void:
-	# Forget the login locally (see sign_out() for the Log out button). The
-	# browser build's tabs share auth.cfg: if another tab has saved a newer
-	# login there meanwhile, leave it be and only drop ours.
-	var dropped := _refresh_token
+func logout(forget_saved := true) -> void:
+	# Forget the login in this instance (see sign_out() for the Log out
+	# button). forget_saved=false leaves whatever is saved on disk alone:
+	# each browser tab keeps its own copy of user://auth.cfg (IndexedDB is
+	# read at load and written back wholesale), so a tab whose session ended
+	# must not blank a newer login another tab saved — the next start
+	# validates whatever is saved anyway.
+	var dropped := _session_id()
 	var was_signed_in := not _access_token.is_empty() or not user_id.is_empty()
 	_access_token = ""
 	_refresh_token = ""
@@ -289,18 +296,28 @@ func logout() -> void:
 	user_email = ""
 	user_display_name = ""
 	login_generation += 1
-	var saved := _saved_refresh_token()
-	if saved.is_empty() or saved == dropped:
+	if forget_saved and _saved_login_is(dropped):
 		_save_auth()
 	if was_signed_in:
 		account_changed.emit()
 
 
-func _saved_refresh_token() -> String:
+func _session_id() -> String:
+	# The server's id for this login; unlike the token text it survives a
+	# renewal, so a second window renewing doesn't disown this one.
+	return str(_token_claims(_refresh_token).get("sid", ""))
+
+
+func _saved_login_is(session_id: String) -> bool:
 	var cfg := ConfigFile.new()
 	if cfg.load(AUTH_FILE) != OK:
-		return ""
-	return str(cfg.get_value("auth", "refresh_token", ""))
+		return true
+	var saved := str(cfg.get_value("auth", "refresh_token", ""))
+	return saved.is_empty() or str(_token_claims(saved).get("sid", "")) == session_id
+
+
+func _tabs_share_saved_login() -> bool:
+	return OS.has_feature("web")
 
 
 func sign_out() -> void:
@@ -323,10 +340,11 @@ func take_signed_out_reason() -> String:
 
 
 func _clear_signed_out_reason() -> void:
-	# Touch only that key: another tab may have saved a newer login.
 	if signed_out_reason.is_empty():
 		return
 	signed_out_reason = ""
+	if _tabs_share_saved_login():
+		return  # writing here would push this tab's whole copy over another's
 	var cfg := ConfigFile.new()
 	if cfg.load(AUTH_FILE) == OK:
 		cfg.set_value("session", "signed_out_reason", "")
@@ -334,8 +352,10 @@ func _clear_signed_out_reason() -> void:
 
 
 func _end_session(reason: String) -> void:
-	signed_out_reason = reason  # saved by logout()
-	logout()
+	signed_out_reason = reason  # saved by logout() when it writes
+	# In the browser, leave the saved login to whoever owns it now; the menu
+	# still explains this tab's sign-out, and the next start re-checks.
+	logout(not _tabs_share_saved_login())
 
 
 func get_me() -> Dictionary:
