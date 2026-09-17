@@ -333,27 +333,12 @@ func _setup_ground() -> void:
 	mesh.size = Vector2(12000, 12000)
 	ground.mesh = mesh
 
-	# Procedural grass texture: tiled Perlin noise mapped through a green ramp.
-	var noise := FastNoiseLite.new()
-	noise.noise_type = FastNoiseLite.TYPE_PERLIN
-	noise.frequency = 0.04
-	noise.fractal_octaves = 4
-	var noise_tex := NoiseTexture2D.new()
-	noise_tex.noise = noise
-	noise_tex.width = 512
-	noise_tex.height = 512
-	noise_tex.seamless = true
-	var ramp := Gradient.new()
-	# Muted olive/ochre meadow.
-	ramp.set_color(0, Belleville.OLIVE.darkened(0.15))
-	ramp.set_color(1, Belleville.BRONZE.lerp(Belleville.OLIVE, 0.5))
-	noise_tex.color_ramp = ramp
-
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = noise_tex
-	mat.uv1_scale = Vector3(200, 200, 1)
-	mat.roughness = 1.0
-	ground.material_override = mat
+	# The shared world-space ground shader, so this backdrop matches the
+	# strip/terrain seamlessly. (It used to be a StandardMaterial3D with a
+	# NoiseTexture2D, which fills asynchronously — the browser renderer kept
+	# its white placeholder and drew the plane washed-out cream.) Only seen
+	# until the course's ground strip replaces it.
+	ground.material_override = _ground_material()
 	add_child(ground)
 	_ground_inst = ground
 
@@ -852,12 +837,66 @@ func _setup_ground_strip() -> void:
 			var v11: Vector3 = verts[(iy + 1) * w + (ix + 1)]
 			st.add_vertex(v00); st.add_vertex(v01); st.add_vertex(v10)
 			st.add_vertex(v10); st.add_vertex(v01); st.add_vertex(v11)
+	_add_ground_skirt(st, min_x, min_y, g, w, h)
 	st.generate_normals()
 	var inst := MeshInstance3D.new()
 	inst.mesh = st.commit()
 	inst.material_override = _ground_material()
 	add_child(inst)
 	_ground_strip_inst = inst
+	# The strip + skirt now cover the whole backdrop area, so the flat plane
+	# is redundant. It has to go: the strip's outer cells sit at exactly
+	# y = 0 — coplanar with the plane — and the browser renderer's classic
+	# depth buffer turned that overlap into distant flicker.
+	if _ground_inst != null:
+		_ground_inst.visible = false
+
+
+func _add_ground_skirt(
+	st: SurfaceTool, min_x: float, min_y: float, g: float, w: int, h: int
+) -> void:
+	# Flat y = 0 skirt from the strip grid's border out to the horizon,
+	# replacing the flat backdrop plane. Every grid border vertex is ≥ REACH_M
+	# from the path, so it's at exactly y = 0; each skirt quad reuses the
+	# border's own vertex coordinates (same float expressions as the grid),
+	# so the seam is watertight — no T-junction cracks. Winding matches the
+	# grid cells (x up the columns, path-y up the rows) → +Y fronts.
+	const HORIZON_M := 6000.0  # the old plane's half-size
+	const MIN_BEYOND_M := 2000.0  # rider-locked backdrop needs ground past the course
+	var gx1 := min_x + float(w - 1) * g
+	var gy1 := min_y + float(h - 1) * g
+	var ox0 := minf(-HORIZON_M, min_x - MIN_BEYOND_M)
+	var ox1 := maxf(HORIZON_M, gx1 + MIN_BEYOND_M)
+	var oy0 := minf(-HORIZON_M, min_y - MIN_BEYOND_M)
+	var oy1 := maxf(HORIZON_M, gy1 + MIN_BEYOND_M)
+	# West + east skirts: one quad per grid row segment.
+	for iy in range(h - 1):
+		var ya := min_y + float(iy) * g
+		var yb := min_y + float(iy + 1) * g
+		_skirt_quad(st, ox0, min_x, ya, yb)
+		_skirt_quad(st, gx1, ox1, ya, yb)
+	# South + north skirts: one quad per grid column segment.
+	for ix in range(w - 1):
+		var xa := min_x + float(ix) * g
+		var xb := min_x + float(ix + 1) * g
+		_skirt_quad(st, xa, xb, oy0, min_y)
+		_skirt_quad(st, xa, xb, gy1, oy1)
+	# Four corners.
+	_skirt_quad(st, ox0, min_x, oy0, min_y)
+	_skirt_quad(st, gx1, ox1, oy0, min_y)
+	_skirt_quad(st, ox0, min_x, gy1, oy1)
+	_skirt_quad(st, gx1, ox1, gy1, oy1)
+
+
+func _skirt_quad(st: SurfaceTool, xa: float, xb: float, ya: float, yb: float) -> void:
+	# Path-frame rectangle [xa,xb]×[ya,yb] at y = 0 (world z = -path y),
+	# emitted in the same corner order as a strip grid cell.
+	var v00 := Vector3(xa, 0.0, -ya)
+	var v10 := Vector3(xb, 0.0, -ya)
+	var v01 := Vector3(xa, 0.0, -yb)
+	var v11 := Vector3(xb, 0.0, -yb)
+	st.add_vertex(v00); st.add_vertex(v01); st.add_vertex(v10)
+	st.add_vertex(v10); st.add_vertex(v01); st.add_vertex(v11)
 
 
 func _ground_material() -> ShaderMaterial:
@@ -1170,12 +1209,16 @@ func _setup_markers() -> void:
 		total_len = float(_course_path[-1]["distance_m"])
 	var marker_count := int(total_len / SPACING_M)
 
+	# Posts stand on the ground bed, which sits GROUND_DROP_M below the road
+	# (same seating as trees and poles); the extra length keeps their tops at
+	# the original 1.4 m / 2.4 m above the road.
+	const GROUND_DROP_M := 0.35
 	var post_mesh := CylinderMesh.new()
-	post_mesh.height = 1.4
+	post_mesh.height = 1.4 + GROUND_DROP_M
 	post_mesh.top_radius = 0.08
 	post_mesh.bottom_radius = 0.08
 	var km_mesh := CylinderMesh.new()
-	km_mesh.height = 2.4
+	km_mesh.height = 2.4 + GROUND_DROP_M
 	km_mesh.top_radius = 0.12
 	km_mesh.bottom_radius = 0.12
 	var post_mat := StandardMaterial3D.new()
@@ -1198,7 +1241,8 @@ func _setup_markers() -> void:
 			# can resolve the world transform without warning.
 			add_child(post)
 			post.global_position = (
-				center + right * (side * SIDE_OFFSET) + Vector3(0, height * 0.5, 0)
+				center + right * (side * SIDE_OFFSET)
+				+ Vector3(0, height * 0.5 - GROUND_DROP_M, 0)
 			)
 
 

@@ -109,6 +109,13 @@ func _init() -> void:
 func _ready() -> void:
 	camera = Camera3D.new()
 	camera.name = "RideCamera"
+	# Near clip up from Godot's 0.05 m default: the browser's Compatibility
+	# renderer uses a classic (non-reverse-Z) depth buffer whose precision is
+	# set almost entirely by the near plane, so 0.25 m gives 5× finer depth at
+	# distance (the road stays proud of the ground out past a kilometre).
+	# The closest view (First Person) keeps its eye 1.45 m above the road with
+	# the rider's own body hidden, so nothing visible comes nearer than this.
+	camera.near = 0.25
 	add_child(camera)
 	camera.current = true
 	# Place the camera exactly on the first preset for frame one — no ease-in

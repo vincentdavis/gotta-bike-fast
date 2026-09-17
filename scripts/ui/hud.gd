@@ -133,6 +133,9 @@ func _on_touch_finish() -> void:
 func _touch_button(glyph: String, size_px: float) -> TouchScreenButton:
 	var btn := TouchScreenButton.new()
 	btn.visibility_mode = TouchScreenButton.VISIBILITY_TOUCHSCREEN_ONLY
+	# TOUCHSCREEN_ONLY only suppresses the button's own texture — its Glyph
+	# child would still draw on desktops — so hide the whole node there.
+	btn.visible = DisplayServer.is_touchscreen_available()
 	btn.texture_normal = _touch_texture(size_px, 0.30)
 	btn.texture_pressed = _touch_texture(size_px, 0.55)
 	var shape := RectangleShape2D.new()

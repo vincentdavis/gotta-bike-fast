@@ -10,10 +10,18 @@ extends RefCounted
 #   - rock blended in by slope (terrain normals), so steep faces on real
 #     GPX mountains read as rock instead of vertical lawn
 #
-# The five palette colors and a posterize control are uniforms, so build()
-# can swap in the muted olive/ochre/umber Belleville palette (and flatten the
-# shading into painted bands) without a second shader. Cheap: one texture
-# fetch ×3, no lighting changes — safe at every quality preset.
+# The five palette colors are uniforms, so build() can swap in the muted
+# olive/ochre/umber Belleville palette without a second shader. Cheap: one
+# texture fetch ×3, no lighting changes — safe at every quality preset.
+#
+# No in-shader posterize: the renderers disagree on the color space shader
+# math runs in (Forward+ works in linear, the browser's Compatibility
+# renderer in gamma/sRGB), so quantizing colors HERE lands the same palette
+# on different bands per renderer — on the web it split the grass into
+# hard cream/olive blotches that the ink pass then outlined and that
+# shimmered as the camera moved. The painted banding comes from the
+# BellevillePost pass instead, which quantizes the final display image and
+# so behaves identically everywhere.
 
 const SHADER_CODE := "
 shader_type spatial;
@@ -25,7 +33,6 @@ uniform vec3 grass_hi : source_color = vec3(0.27, 0.42, 0.16);
 uniform vec3 dry_col : source_color = vec3(0.36, 0.35, 0.17);
 uniform vec3 rock_lo : source_color = vec3(0.24, 0.21, 0.18);
 uniform vec3 rock_hi : source_color = vec3(0.38, 0.35, 0.31);
-uniform float posterize = 0.0;  // 0 = smooth; >0 = quantize to N bands
 
 varying vec3 w_pos;
 varying float w_up;
@@ -49,9 +56,6 @@ void fragment() {
 
 	vec3 col = mix(grass, rock, rockiness);
 	col *= 0.92 + 0.16 * n_fine;  // micro contact-shading breakup
-	if (posterize > 0.5) {
-		col = floor(col * posterize + 0.5) / posterize;
-	}
 	ALBEDO = col;
 	ROUGHNESS = 1.0;
 }
@@ -78,12 +82,10 @@ static func build() -> ShaderMaterial:
 	mat.shader = shader
 	mat.set_shader_parameter("noise_tex", tex)
 
-	# Muted sun-faded meadow: olive grass, mustard dry patches, umber rock,
-	# quantized into painted bands to match the hand-drawn post-process.
+	# Muted sun-faded meadow: olive grass, mustard dry patches, umber rock.
 	mat.set_shader_parameter("grass_lo", Belleville.OLIVE.darkened(0.28))
 	mat.set_shader_parameter("grass_hi", Belleville.OLIVE.lerp(Belleville.BRONZE, 0.45))
 	mat.set_shader_parameter("dry_col", Belleville.BRONZE.lerp(Belleville.OCHRE, 0.4))
 	mat.set_shader_parameter("rock_lo", Belleville.UMBER.darkened(0.1))
 	mat.set_shader_parameter("rock_hi", Belleville.UMBER.lerp(Belleville.SAGE, 0.35))
-	mat.set_shader_parameter("posterize", 6.0)
 	return mat

@@ -16,6 +16,7 @@ func _ready() -> void:
 func _force_touch_visible(node: Node) -> void:
 	if node is TouchScreenButton:
 		node.visibility_mode = TouchScreenButton.VISIBILITY_ALWAYS
+		node.visible = true
 	for child in node.get_children():
 		_force_touch_visible(child)
 
