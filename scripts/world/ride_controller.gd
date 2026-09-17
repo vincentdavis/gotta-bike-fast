@@ -139,6 +139,33 @@ var _ground_inst: MeshInstance3D = null
 # real terrain arrives — at that point it would just z-fight with the
 # terrain (both surfaces driven by the same elevations).
 var _ground_strip_inst: MeshInstance3D = null
+# The strip's height grid, kept so _ground_height_at can sample the exact
+# surface the mesh draws (same cell origin/spacing/triangle split).
+var _strip_heights := PackedFloat32Array()
+var _strip_min_x := 0.0
+var _strip_min_y := 0.0
+var _strip_g := 0.0
+var _strip_w := 0
+var _strip_h := 0
+# Road-proximity index: densified path points bucketed on a coarse grid, so
+# "is (x, z) within r of the road" works for sparse paths too (the synthetic
+# Flat 5K Loop is ONE 5 km segment between two waypoints).
+const ROAD_INDEX_CELL_M := 16.0
+const ROAD_INDEX_STEP_M := 1.0
+var _road_index: Dictionary = {}
+# distance_m of every waypoint, for binary-search segment lookup (the linear
+# scan cost O(route) per call — per physics tick, and per dash at build).
+var _path_dists := PackedFloat64Array()
+# Backdrop depth extension. The ring rides at the rider's height (so peaks
+# keep the same place on the horizon everywhere), and its pieces would hover
+# over the y = 0 ground on raised sections — so a column under each mountain
+# and the tower shafts are stretched down to the ground each time the rider's
+# height changes. Per-piece rest data, filled when the backdrop is built.
+var _backdrop_columns: MultiMesh = null
+var _backdrop_col_data: Array = []    # [px, pz, yaw, width]
+var _backdrop_towers: MultiMesh = null
+var _backdrop_tower_data: Array = []  # [rest Basis, roof-centre Vector3]
+var _backdrop_depth := -1.0
 
 # Belleville theme set-dressing — telegraph poles, path-anchored. Parented
 # under one node rebuilt wholesale when terrain arrives. Held off
@@ -357,6 +384,7 @@ func _build_course_visuals() -> void:
 	# the upload entirely.
 	_compute_course_path()
 	_compute_waypoint_frames()
+	_build_road_index()
 	_setup_ground_strip()
 	_setup_road()
 	_setup_markers()
@@ -703,7 +731,7 @@ func _build_terrain_mesh() -> void:
 
 
 func _terrain_height_at(world_x: float, world_z: float) -> float:
-	# Bilinear sample. World Z = -y_m in the path's local frame, so
+	# Height of the terrain mesh. World Z = -y_m in the path's local frame, so
 	# convert before indexing the grid. Returns 0 (the fallback flat
 	# plane's height) when no heightmap is loaded yet — the ride can
 	# start before the PNG download completes.
@@ -723,9 +751,12 @@ func _terrain_height_at(world_x: float, world_z: float) -> float:
 	var e10: float = _terrain_heights[iy * w + (ix + 1)]
 	var e01: float = _terrain_heights[(iy + 1) * w + ix]
 	var e11: float = _terrain_heights[(iy + 1) * w + (ix + 1)]
-	var a: float = e00 + (e10 - e00) * tx
-	var b: float = e01 + (e11 - e01) * tx
-	return a + (b - a) * ty
+	# Same v01–v10 triangle split as _build_terrain_mesh, so objects sit on
+	# the surface actually drawn (a bilinear blend is off by up to a quarter
+	# of the cell's twist).
+	if tx + ty <= 1.0:
+		return e00 + tx * (e10 - e00) + ty * (e01 - e00)
+	return e11 + (1.0 - tx) * (e01 - e11) + (1.0 - ty) * (e10 - e11)
 
 
 func _compute_waypoint_frames() -> void:
@@ -762,17 +793,89 @@ func _compute_waypoint_frames() -> void:
 		_waypoint_rights.append(Vector3(-tng.z, 0, tng.x))
 
 
+func _path_samples(max_step: float) -> PackedVector3Array:
+	# Every waypoint plus evenly spaced fill-ins, so consecutive samples are at
+	# most max_step apart. World coords (x, elevation, -path_y); elevation is
+	# linear between waypoints, exactly like the road mesh.
+	var out := PackedVector3Array()
+	for i in _course_path.size():
+		var p: Dictionary = _course_path[i]
+		var a := Vector3(float(p["x_m"]), float(p["elevation_m"]), -float(p["y_m"]))
+		if i > 0:
+			var q: Dictionary = _course_path[i - 1]
+			var b := Vector3(float(q["x_m"]), float(q["elevation_m"]), -float(q["y_m"]))
+			var n := int(ceil(Vector2(a.x - b.x, a.z - b.z).length() / max_step))
+			for k in range(1, n):
+				out.append(b.lerp(a, float(k) / float(n)))
+		out.append(a)
+	return out
+
+
+func _build_road_index() -> void:
+	_road_index = {}
+	for s in _path_samples(ROAD_INDEX_STEP_M):
+		var key := Vector2i(floori(s.x / ROAD_INDEX_CELL_M), floori(s.z / ROAD_INDEX_CELL_M))
+		if not _road_index.has(key):
+			_road_index[key] = PackedVector2Array()
+		var bucket: PackedVector2Array = _road_index[key]
+		bucket.append(Vector2(s.x, s.z))
+		_road_index[key] = bucket
+
+
+func _near_road(x: float, z: float, radius: float) -> bool:
+	# True if any densified road point lies within radius of (x, z). The 3×3
+	# bucket neighbourhood covers radius ≤ ROAD_INDEX_CELL_M.
+	var r2 := radius * radius
+	var cx := floori(x / ROAD_INDEX_CELL_M)
+	var cz := floori(z / ROAD_INDEX_CELL_M)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var key := Vector2i(cx + dx, cz + dz)
+			if not _road_index.has(key):
+				continue
+			for q in _road_index[key]:
+				var ex: float = q.x - x
+				var ez: float = q.y - z
+				if ex * ex + ez * ez < r2:
+					return true
+	return false
+
+
+func _ground_height_at(x: float, z: float) -> float:
+	# Height of the ground actually drawn at world (x, z): the DEM terrain
+	# once loaded, else the ground strip (sampled with the mesh's own
+	# triangle split, so objects sit exactly on it), else the flat y = 0
+	# skirt/plane.
+	# _terrain_inst, not _terrain_width: the width is known before the DEM
+	# downloads (and stays set if the download fails).
+	if _terrain_inst != null:
+		return _terrain_height_at(x, z)
+	if _strip_w < 2 or _strip_h < 2 or _strip_g <= 0.0:
+		return 0.0
+	var tri := _strip_triangle(x, z)
+	if tri.is_empty():
+		return 0.0  # on the skirt
+	return (
+		_strip_heights[tri[0]] * tri[3]
+		+ _strip_heights[tri[1]] * tri[4]
+		+ _strip_heights[tri[2]] * tri[5]
+	)
+
+
 func _setup_ground_strip() -> void:
 	# Path-following backdrop ground used until (or instead of) the real
 	# heightmap terrain. Built as a RASTERIZED heightfield — a grid whose
-	# cells take the elevation of the nearest path point (minus a road-bed
-	# drop), fading toward the flat y=0 plane with distance. The previous
-	# approach (a 120 m-wide ribbon swept along the path) self-overlapped
-	# on any bend tighter than its half-width, and overlap pieces from
-	# higher waypoints buried stretches of road ("road disappears" on real
-	# GPX courses). A grid cannot self-overlap, and the nearest-point drop
-	# keeps the road proud of the ground by construction.
-	const REACH_M := 170.0  # ground influence radius around the path
+	# cells take the elevation of the nearest road point (minus a road-bed
+	# drop), fading toward the flat y=0 skirt with distance. The previous
+	# approach (a 120 m-wide ribbon swept along the path) self-overlapped on
+	# any bend tighter than its half-width, and overlap pieces from higher
+	# waypoints buried stretches of road ("road disappears" on real GPX
+	# courses). A grid cannot self-overlap, and _clamp_strip_under_road then
+	# lowers it under every asphalt triangle, so the road stays proud of the
+	# ground by construction — even across dips and where two legs of the
+	# route pass close (the upper leg then reads as a low causeway rather
+	# than burying the lower one).
+	const REACH_M := 170.0  # min ground influence radius around the path
 	const DROP_M := 0.35    # ground sits this far below the road bed
 	if _course_path.size() < 2:
 		return
@@ -784,24 +887,39 @@ func _setup_ground_strip() -> void:
 	for p in _course_path:
 		min_x = minf(min_x, float(p["x_m"])); max_x = maxf(max_x, float(p["x_m"]))
 		min_y = minf(min_y, float(p["y_m"])); max_y = maxf(max_y, float(p["y_m"]))
-	min_x -= REACH_M; max_x += REACH_M
-	min_y -= REACH_M; max_y += REACH_M
-	var extent := maxf(max_x - min_x, max_y - min_y)
+	var extent := maxf(max_x - min_x, max_y - min_y) + 2.0 * REACH_M
 	var g := maxf(15.0, ceilf(extent / 200.0 / 5.0) * 5.0)
+	# Ground within INNER of the road keeps the road's own grade (every vertex
+	# a road-touching triangle can use), then fades toward y = 0 by REACH.
+	# Fading from the road itself sank those vertices metres below high roads,
+	# and so did a fixed reach once coarse grids (big routes) outgrew it.
+	var inner_m := g * 1.5 + 3.0
+	var reach := maxf(REACH_M, inner_m + 40.0)
+	# Margin = reach: the fade finishes inside the grid, so the border sits at
+	# exactly y = 0 for the skirt, and it is wider than any triangle the road
+	# can touch, so the clamp below never moves a border vertex (it cracked
+	# the skirt seam once g reached 170 m, on > ~33 km routes).
+	var margin := reach
+	min_x -= margin; max_x += margin
+	min_y -= margin; max_y += margin
 	var w := int(ceil((max_x - min_x) / g)) + 1
 	var h := int(ceil((max_y - min_y) / g)) + 1
 
-	# Stamp nearest-path-point elevation + falloff weight per cell (same
-	# pattern as the road-corridor carve): nearest path point wins.
-	var wgt := PackedFloat32Array()
-	wgt.resize(w * h)
+	# Stamp the NEAREST road elevation per cell, from the DENSIFIED path (every
+	# waypoint plus fill-ins ≤ g/2 apart — sparse synthetic paths otherwise
+	# left most of the road hovering over a flat plain). That keeps the ground
+	# ~DROP_M under the road along steady grades; _clamp_strip_under_road
+	# then fixes the places where interpolation still pokes through.
+	var near := PackedFloat32Array()
+	near.resize(w * h)
+	near.fill(INF)
 	var ele := PackedFloat32Array()
 	ele.resize(w * h)
-	var reach_cells := int(ceil(REACH_M / g)) + 1
-	for p in _course_path:
-		var cx := (float(p["x_m"]) - min_x) / g
-		var cy := (float(p["y_m"]) - min_y) / g
-		var target := float(p["elevation_m"]) - DROP_M
+	var reach_cells := int(ceil(reach / g)) + 1
+	for sample in _path_samples(g * 0.5):
+		var cx := (sample.x - min_x) / g
+		var cy := (-sample.z - min_y) / g
+		var target := sample.y - DROP_M
 		var ix0 := maxi(int(floor(cx)) - reach_cells, 0)
 		var ix1 := mini(int(floor(cx)) + reach_cells, w - 1)
 		var iy0 := maxi(int(floor(cy)) - reach_cells, 0)
@@ -811,24 +929,36 @@ func _setup_ground_strip() -> void:
 				var dx := (float(ix) - cx) * g
 				var dy := (float(iy) - cy) * g
 				var dist := sqrt(dx * dx + dy * dy)
-				if dist >= REACH_M:
+				if dist >= reach - 0.01:  # (the border ring stays exactly 0)
 					continue
-				var s := 1.0 - smoothstep(0.0, REACH_M, dist)
 				var idx := iy * w + ix
-				if s > wgt[idx]:
-					wgt[idx] = s
+				if dist < near[idx]:
+					near[idx] = dist
 					ele[idx] = target
 
 	# Mesh it exactly like the terrain heightfield (clockwise fronts).
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_strip_heights = PackedFloat32Array()
+	_strip_heights.resize(w * h)
+	for idx in w * h:
+		if near[idx] < INF:
+			# fades to the y = 0 skirt beyond the inner zone
+			_strip_heights[idx] = ele[idx] * (1.0 - smoothstep(inner_m, reach, near[idx]))
+	_strip_min_x = min_x
+	_strip_min_y = min_y
+	_strip_g = g
+	_strip_w = w
+	_strip_h = h
+	_clamp_strip_under_road(DROP_M)
 	var verts: Array = []
 	verts.resize(w * h)
 	for iy in h:
 		for ix in w:
 			var idx := iy * w + ix
-			var y_m := ele[idx] * wgt[idx]  # fades to the y=0 plane at the edge
-			verts[idx] = Vector3(min_x + float(ix) * g, y_m, -(min_y + float(iy) * g))
+			verts[idx] = Vector3(
+				min_x + float(ix) * g, _strip_heights[idx], -(min_y + float(iy) * g)
+			)
 	for iy in range(h - 1):
 		for ix in range(w - 1):
 			var v00: Vector3 = verts[iy * w + ix]
@@ -852,15 +982,239 @@ func _setup_ground_strip() -> void:
 		_ground_inst.visible = false
 
 
+func _strip_triangle(x: float, z: float) -> Array:
+	# [i0, i1, i2, w0, w1, w2]: the strip grid vertices and barycentric
+	# weights of the drawn triangle under world (x, z) — cells are split
+	# along the v01–v10 diagonal, exactly as the mesh is emitted. Empty when
+	# (x, z) lies outside the grid.
+	var fx := (x - _strip_min_x) / _strip_g
+	var fy := (-z - _strip_min_y) / _strip_g
+	if fx < 0.0 or fy < 0.0 or fx > float(_strip_w - 1) or fy > float(_strip_h - 1):
+		return []
+	var ix := mini(int(fx), _strip_w - 2)
+	var iy := mini(int(fy), _strip_h - 2)
+	var u := fx - float(ix)
+	var v := fy - float(iy)
+	var i00 := iy * _strip_w + ix
+	var i10 := i00 + 1
+	var i01 := i00 + _strip_w
+	var i11 := i01 + 1
+	if u + v <= 1.0:
+		return [i00, i10, i01, 1.0 - u - v, u, v]
+	return [i11, i01, i10, u + v - 1.0, 1.0 - u, 1.0 - v]
+
+
+func _clamp_strip_under_road(drop_m: float) -> void:
+	# Keep the road visible everywhere. Interpolating nearest-road heights
+	# across a cell can lift the ground through the road bed — at the bottom
+	# of a dip (Rollers 5K hid ~10 m of road) or where two legs of a route
+	# pass close at different heights. Wherever the drawn ground rises above
+	# road − drop_m at a check point, the corners of the triangle under it are
+	# lowered by exactly that excess (largest excess per corner wins), which
+	# puts the check point at or below the target; ground elsewhere is left
+	# alone (lowering corners wholesale floated the road over every climb).
+	# The checks walk the ASPHALT's own triangles (same corners as
+	# _setup_road): road and ground are both piecewise linear, so over each
+	# asphalt triangle the gap only changes slope along its edges where they
+	# cross grid lines, and inside it at grid vertices — all of which are
+	# checked, so every asphalt triangle ends ≥ drop_m (+ lift) above ground.
+	const HALF_W := 2.0  # _setup_road's ROAD_WIDTH / 2
+	var lower := PackedFloat32Array()
+	lower.resize(_strip_heights.size())
+	for i in range(_course_path.size() - 1):
+		var c := _asphalt_corners(i, HALF_W)
+		var l0: Vector3 = c[0]
+		var rr0: Vector3 = c[1]
+		var l1: Vector3 = c[2]
+		var rr1: Vector3 = c[3]
+		# The two asphalt triangles: (l0, l1, rr0) and (rr0, l1, rr1).
+		_clamp_line(l0, l1, drop_m, lower)
+		_clamp_line(rr0, rr1, drop_m, lower)
+		_clamp_line(l0, rr0, drop_m, lower)
+		_clamp_line(l1, rr1, drop_m, lower)
+		_clamp_line(rr0, l1, drop_m, lower)
+		_clamp_triangle_vertices(l0, l1, rr0, drop_m, lower)
+		_clamp_triangle_vertices(rr0, l1, rr1, drop_m, lower)
+	# Apply — never to the border ring, which must stay at y = 0 for the skirt
+	# (the margin keeps every check away from it; this is belt and braces).
+	for iy in range(1, _strip_h - 1):
+		for ix in range(1, _strip_w - 1):
+			var idx := iy * _strip_w + ix
+			_strip_heights[idx] -= lower[idx]
+
+
+func _asphalt_corners(seg: int, half_w: float) -> Array:
+	# [l0, r0, l1, r1] of segment seg's asphalt quad, exactly as _setup_road
+	# builds them (y = path elevation, without the road lift).
+	var a := _path_point(seg)
+	var b := _path_point(seg + 1)
+	var r0: Vector3 = _waypoint_rights[seg] if seg < _waypoint_rights.size() else Vector3.ZERO
+	var r1: Vector3 = _waypoint_rights[seg + 1] if seg + 1 < _waypoint_rights.size() else r0
+	return [a - r0 * half_w, a + r0 * half_w, b - r1 * half_w, b + r1 * half_w]
+
+
+func _diagonal_crossing(seg: int, d0: float, d1: float) -> float:
+	# Path distance in (d0, d1) where the road centreline crosses segment
+	# seg's asphalt diagonal (r0 → l1), or -1 if it doesn't.
+	var c := _asphalt_corners(seg, 2.0)
+	var p0 := _position_at_distance(d0)
+	var p1 := _position_at_distance(d1)
+	var a := Vector2(p0.x, p0.z)
+	var b := Vector2(p1.x, p1.z)
+	var q0 := Vector2((c[1] as Vector3).x, (c[1] as Vector3).z)
+	var q1 := Vector2((c[2] as Vector3).x, (c[2] as Vector3).z)
+	var hit: Variant = Geometry2D.segment_intersects_segment(a, b, q0, q1)
+	if hit == null:
+		return -1.0
+	var span := b.distance_to(a)
+	if span < 1e-6:
+		return -1.0
+	var f := (hit as Vector2).distance_to(a) / span
+	if f <= 1e-3 or f >= 1.0 - 1e-3:
+		return -1.0
+	return d0 + (d1 - d0) * f
+
+
+func _dash_station_height(seg: int, p: Vector3, side: Vector3) -> float:
+	# One height for both corners of a dash end at centre-line point p: the
+	# asphalt under p, nudged up (by at most a few cm, never tilting the dash)
+	# if the asphalt under either corner — its own quad's or a nearby
+	# segment's overlapping at a tight bend — sits slightly higher.
+	const MAX_NUDGE := 0.06
+	var h := _centreline_asphalt_height(seg, p)
+	var top := h
+	for corner in [p - side, p + side]:
+		for sg in range(seg - 2, seg + 3):
+			if sg < 0 or sg >= _course_path.size() - 1:
+				continue
+			var c := _asphalt_corners(sg, 2.0)
+			for tri in [
+				_tri_plane(c[0], c[2], c[1], corner.x, corner.z),
+				_tri_plane(c[1], c[2], c[3], corner.x, corner.z),
+			]:
+				var t: float = tri[1]
+				if tri[0] > 0.5 and t > top and t - h <= MAX_NUDGE:
+					top = t
+	return top
+
+
+func _centreline_asphalt_height(seg: int, p: Vector3) -> float:
+	# Height (without lift) of segment seg's asphalt at the centre-line point
+	# p (which lies on the path, so inside the segment's quad for any normal
+	# bend). A folded quad at a hairpin can leave p outside both triangles —
+	# then the path's own elevation is the honest answer.
+	var c := _asphalt_corners(seg, 2.0)
+	var t1 := _tri_plane(c[0], c[2], c[1], p.x, p.z)
+	if t1[0] > 0.5:
+		return t1[1]
+	var t2 := _tri_plane(c[1], c[2], c[3], p.x, p.z)
+	if t2[0] > 0.5:
+		return t2[1]
+	return p.y
+
+
+func _tri_plane(p0: Vector3, p1: Vector3, p2: Vector3, x: float, z: float) -> Array:
+	# [inside (1/0), plane height] of triangle p0,p1,p2 at world (x, z).
+	var den := (p1.z - p2.z) * (p0.x - p2.x) + (p2.x - p1.x) * (p0.z - p2.z)
+	if absf(den) < 1e-12:
+		return [0.0, -INF]
+	var w0 := ((p1.z - p2.z) * (x - p2.x) + (p2.x - p1.x) * (z - p2.z)) / den
+	var w1 := ((p2.z - p0.z) * (x - p2.x) + (p0.x - p2.x) * (z - p2.z)) / den
+	var w2 := 1.0 - w0 - w1
+	var inside := 1.0 if (w0 >= -1e-6 and w1 >= -1e-6 and w2 >= -1e-6) else 0.0
+	return [inside, w0 * p0.y + w1 * p1.y + w2 * p2.y]
+
+
+func _path_point(i: int) -> Vector3:
+	var p: Dictionary = _course_path[i]
+	return Vector3(float(p["x_m"]), float(p["elevation_m"]), -float(p["y_m"]))
+
+
+func _clamp_point(x: float, z: float, target: float, lower: PackedFloat32Array) -> void:
+	var tri := _strip_triangle(x, z)
+	if tri.is_empty():
+		return
+	var y: float = (
+		_strip_heights[tri[0]] * tri[3]
+		+ _strip_heights[tri[1]] * tri[4]
+		+ _strip_heights[tri[2]] * tri[5]
+	)
+	var excess := y - target
+	if excess <= 0.0:
+		return
+	# Corners with (near-)zero weight don't hold the point up — leave them.
+	for k in 3:
+		if float(tri[3 + k]) > 1e-4:
+			var vi: int = tri[k]
+			lower[vi] = maxf(lower[vi], excess)
+
+
+func _clamp_line(p0: Vector3, p1: Vector3, drop_m: float, lower: PackedFloat32Array) -> void:
+	# Check both ends and every crossing with a grid line (x, y and the
+	# cell diagonals) along the straight road line p0→p1; y is road height.
+	var f0 := Vector2((p0.x - _strip_min_x) / _strip_g, (-p0.z - _strip_min_y) / _strip_g)
+	var f1 := Vector2((p1.x - _strip_min_x) / _strip_g, (-p1.z - _strip_min_y) / _strip_g)
+	var ts: Array[float] = [0.0, 1.0]
+	_line_crossings(f0.x, f1.x, ts)
+	_line_crossings(f0.y, f1.y, ts)
+	_line_crossings(f0.x + f0.y, f1.x + f1.y, ts)
+	for t in ts:
+		var q := p0.lerp(p1, t)
+		_clamp_point(q.x, q.z, q.y - drop_m, lower)
+
+
+func _line_crossings(v0: float, v1: float, ts: Array[float]) -> void:
+	# Parameters t in (0, 1) where v0 + (v1 - v0)·t hits a whole number.
+	if absf(v1 - v0) < 1e-9:
+		return
+	var lo := minf(v0, v1)
+	var hi := maxf(v0, v1)
+	for k in range(int(ceil(lo)), int(floor(hi)) + 1):
+		var t := (float(k) - v0) / (v1 - v0)
+		if t > 0.0 and t < 1.0:
+			ts.append(t)
+
+
+func _clamp_triangle_vertices(
+	p0: Vector3, p1: Vector3, p2: Vector3, drop_m: float, lower: PackedFloat32Array,
+) -> void:
+	# Grid vertices lying inside the road triangle p0,p1,p2 (y = road height):
+	# the ground there IS the vertex, so lower it by its own excess.
+	var q0 := Vector2(p0.x, -p0.z)
+	var q1 := Vector2(p1.x, -p1.z)
+	var q2 := Vector2(p2.x, -p2.z)
+	var den := (q1.y - q2.y) * (q0.x - q2.x) + (q2.x - q1.x) * (q0.y - q2.y)
+	if absf(den) < 1e-9:
+		return  # degenerate (zero-area) triangle
+	var ix0 := maxi(int(ceil((minf(q0.x, minf(q1.x, q2.x)) - _strip_min_x) / _strip_g)), 0)
+	var ix1 := mini(int(floor((maxf(q0.x, maxf(q1.x, q2.x)) - _strip_min_x) / _strip_g)), _strip_w - 1)
+	var iy0 := maxi(int(ceil((minf(q0.y, minf(q1.y, q2.y)) - _strip_min_y) / _strip_g)), 0)
+	var iy1 := mini(int(floor((maxf(q0.y, maxf(q1.y, q2.y)) - _strip_min_y) / _strip_g)), _strip_h - 1)
+	for iy in range(iy0, iy1 + 1):
+		for ix in range(ix0, ix1 + 1):
+			var vx := _strip_min_x + float(ix) * _strip_g
+			var vy := _strip_min_y + float(iy) * _strip_g
+			var w0 := ((q1.y - q2.y) * (vx - q2.x) + (q2.x - q1.x) * (vy - q2.y)) / den
+			var w1 := ((q2.y - q0.y) * (vx - q2.x) + (q0.x - q2.x) * (vy - q2.y)) / den
+			var w2 := 1.0 - w0 - w1
+			if w0 < -1e-6 or w1 < -1e-6 or w2 < -1e-6:
+				continue
+			var idx := iy * _strip_w + ix
+			var road_y := w0 * p0.y + w1 * p1.y + w2 * p2.y
+			var excess := _strip_heights[idx] - (road_y - drop_m)
+			if excess > 0.0:
+				lower[idx] = maxf(lower[idx], excess)
+
+
 func _add_ground_skirt(
 	st: SurfaceTool, min_x: float, min_y: float, g: float, w: int, h: int
 ) -> void:
 	# Flat y = 0 skirt from the strip grid's border out to the horizon,
-	# replacing the flat backdrop plane. Every grid border vertex is ≥ REACH_M
-	# from the path, so it's at exactly y = 0; each skirt quad reuses the
-	# border's own vertex coordinates (same float expressions as the grid),
-	# so the seam is watertight — no T-junction cracks. Winding matches the
-	# grid cells (x up the columns, path-y up the rows) → +Y fronts.
+	# replacing the flat backdrop plane. Every grid border vertex is at least
+	# the strip's reach from the path, so it's at exactly y = 0; each skirt
+	# quad reuses the border's own vertex coordinates (same float expressions
+	# as the grid), so the seam is watertight — no T-junction cracks. Winding
+	# matches the grid cells (x up the columns, path-y up the rows) → +Y fronts.
 	const HORIZON_M := 6000.0  # the old plane's half-size
 	const MIN_BEYOND_M := 2000.0  # rider-locked backdrop needs ground past the course
 	var gx1 := min_x + float(w - 1) * g
@@ -909,6 +1263,7 @@ func _ground_material() -> ShaderMaterial:
 
 func _compute_course_path() -> void:
 	_course_path = []
+	_path_dists = PackedFloat64Array()  # rebuilt lazily by _find_path_segment
 	if current_course.is_empty():
 		return
 	var raw_path: Array = current_course.get("path", [])
@@ -958,18 +1313,28 @@ func _compute_course_path() -> void:
 			"y_m": d,
 			"elevation_m": cum_ele,
 		})
+	# Same invariant as GPX paths: the lowest point sits at y = 0 (a profile
+	# that descends from its start would otherwise run below the y = 0 skirt).
+	var synth_min := INF
+	for p in _course_path:
+		synth_min = minf(synth_min, float(p["elevation_m"]))
+	for p in _course_path:
+		p["elevation_m"] = float(p["elevation_m"]) - synth_min
 
 
 func _find_path_segment(d: float) -> int:
-	# Returns index i such that path[i].distance_m <= d <= path[i+1].distance_m.
-	if _course_path.size() < 2:
+	# Returns index i such that path[i].distance_m <= d <= path[i+1].distance_m
+	# (the first such i; clamped to the ends). Binary search over a cached
+	# distance array — user GPX routes run to thousands of points.
+	var n := _course_path.size()
+	if n < 2:
 		return 0
-	# Linear scan — bounded by path length (~500 for the Test Curves course,
-	# fine at 60 Hz). Switch to binary search if real GPX routes get huge.
-	for i in range(_course_path.size() - 1):
-		if d <= float(_course_path[i + 1]["distance_m"]):
-			return i
-	return _course_path.size() - 2
+	if _path_dists.size() != n:
+		_path_dists = PackedFloat64Array()
+		_path_dists.resize(n)
+		for i in n:
+			_path_dists[i] = float(_course_path[i]["distance_m"])
+	return clampi(_path_dists.bsearch(d, true) - 1, 0, n - 2)
 
 
 func _wrap_distance(d: float) -> float:
@@ -1100,29 +1465,74 @@ func _setup_road() -> void:
 	var dashes := SurfaceTool.new()
 	dashes.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dash_half_w := LINE_WIDTH * 0.5
-	var dash_half_l := DASH_LENGTH * 0.5
 	var dash_lift := Vector3(0, 0.07, 0)
 	var total_len: float = float(current_course.get("length_m", 0.0))
 	if total_len <= 0.0 and _course_path.size() > 0:
 		total_len = float(_course_path[-1]["distance_m"])
 	var num_dashes := int(total_len / DASH_PERIOD)
+	# Each dash lies ON the road: it's split at every waypoint it spans and
+	# where it crosses its segment's asphalt diagonal (so each piece sits on
+	# one flat asphalt triangle), and each end takes the height of the asphalt
+	# under the centre line there + the dash lift — the same height for both
+	# of its corners, since the road has no cross-slope. (A single flat 3 m
+	# quad buried its uphill end on anything steeper than ~1.3 %; the
+	# asphalt's bend-mitred triangles also bow away from the straight-line
+	# profile on steep sharp bends.)
+	_find_path_segment(0.0)  # make sure _path_dists is cached
+	var dash_above := dash_lift.y - lift.y  # height over the asphalt surface
 	for i in num_dashes:
-		var d_mid: float = float(i) * DASH_PERIOD + dash_half_l
-		var center := _position_at_distance(d_mid) + dash_lift
-		var tng := _tangent_at_distance(d_mid)
-		var right := Vector3(-tng.z, 0, tng.x)
-		var ahead := tng * dash_half_l
-		var fl := center + ahead - right * dash_half_w
-		var fr := center + ahead + right * dash_half_w
-		var br := center - ahead + right * dash_half_w
-		var bl := center - ahead - right * dash_half_w
-		# Clockwise-from-camera so the dash surface normal points +Y.
-		dashes.add_vertex(bl)
-		dashes.add_vertex(fl)
-		dashes.add_vertex(br)
-		dashes.add_vertex(br)
-		dashes.add_vertex(fl)
-		dashes.add_vertex(fr)
+		var d_start: float = float(i) * DASH_PERIOD
+		var d_end: float = d_start + DASH_LENGTH
+		var stations: Array[float] = [d_start]
+		var j := _path_dists.bsearch(d_start, false)  # first waypoint > d_start
+		while j < _path_dists.size() and _path_dists[j] < d_end:
+			stations.append(_path_dists[j])
+			j += 1
+		stations.append(d_end)
+		# Also split where a piece crosses its segment's asphalt diagonal: a
+		# bent segment's two triangles meet there in a slight crease, and a
+		# flat piece spanning it would dip under the ridge.
+		var creased: Array[float] = []
+		for k in stations.size() - 1:
+			creased.append(stations[k])
+			var dm := (stations[k] + stations[k + 1]) * 0.5
+			var sg := _find_path_segment(_wrap_distance(dm))
+			var t := _diagonal_crossing(sg, stations[k], stations[k + 1])
+			if t > 0.0:
+				creased.append(t)
+		creased.append(d_end)
+		stations = creased
+		for k in stations.size() - 1:
+			var d0: float = stations[k]
+			var d1: float = stations[k + 1]
+			if d1 - d0 < 1e-4:
+				continue
+			var c0 := _position_at_distance(d0)
+			var c1 := _position_at_distance(d1)
+			var along := Vector2(c1.x - c0.x, c1.z - c0.z)
+			if along.length() < 1e-5:
+				continue
+			along = along.normalized()
+			var right := Vector3(-along.y, 0.0, along.x)
+			var seg := _find_path_segment(_wrap_distance((d0 + d1) * 0.5))
+			var side := right * dash_half_w
+			var y0 := _dash_station_height(seg, c0, side) + lift.y + dash_above
+			var y1 := _dash_station_height(seg, c1, side) + lift.y + dash_above
+			var bl := c0 - right * dash_half_w
+			var br := c0 + right * dash_half_w
+			var fl := c1 - right * dash_half_w
+			var fr := c1 + right * dash_half_w
+			bl.y = y0
+			br.y = y0
+			fl.y = y1
+			fr.y = y1
+			# Clockwise-from-camera so the dash surface normal points +Y.
+			dashes.add_vertex(bl)
+			dashes.add_vertex(fl)
+			dashes.add_vertex(br)
+			dashes.add_vertex(br)
+			dashes.add_vertex(fl)
+			dashes.add_vertex(fr)
 	dashes.generate_normals()
 	var dash_inst := MeshInstance3D.new()
 	dash_inst.mesh = dashes.commit()
@@ -1209,16 +1619,12 @@ func _setup_markers() -> void:
 		total_len = float(_course_path[-1]["distance_m"])
 	var marker_count := int(total_len / SPACING_M)
 
-	# Posts stand on the ground bed, which sits GROUND_DROP_M below the road
-	# (same seating as trees and poles); the extra length keeps their tops at
-	# the original 1.4 m / 2.4 m above the road.
-	const GROUND_DROP_M := 0.35
 	var post_mesh := CylinderMesh.new()
-	post_mesh.height = 1.4 + GROUND_DROP_M
+	post_mesh.height = 1.4
 	post_mesh.top_radius = 0.08
 	post_mesh.bottom_radius = 0.08
 	var km_mesh := CylinderMesh.new()
-	km_mesh.height = 2.4 + GROUND_DROP_M
+	km_mesh.height = 2.4
 	km_mesh.top_radius = 0.12
 	km_mesh.bottom_radius = 0.12
 	var post_mat := StandardMaterial3D.new()
@@ -1240,10 +1646,17 @@ func _setup_markers() -> void:
 			# Add to the tree before assigning global_position so Godot
 			# can resolve the world transform without warning.
 			add_child(post)
-			post.global_position = (
-				center + right * (side * SIDE_OFFSET)
-				+ Vector3(0, height * 0.5 - GROUND_DROP_M, 0)
+			# Stand on the ground drawn under the post (below the road bed)
+			# and stretch so the top stays `height` above the road surface.
+			var base: Vector3 = center + right * (float(side) * SIDE_OFFSET)
+			# Capped: where the ground falls away steeply a post stops 3 m down
+			# rather than turning into a long white rod down the embankment.
+			var ground_y := clampf(
+				_ground_height_at(base.x, base.z), center.y - 3.0, center.y
 			)
+			var span := height + (center.y - ground_y)
+			post.scale = Vector3(1.0, span / height, 1.0)
+			post.global_position = Vector3(base.x, ground_y + span * 0.5, base.z)
 
 
 func _setup_scenery() -> void:
@@ -1277,7 +1690,6 @@ func _setup_scenery() -> void:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xB1CE_F00D
-	var min_d2_threshold := MIN_DIST_TO_ROAD * MIN_DIST_TO_ROAD
 
 	# Collect placements per variety, then build one MultiMesh per variety
 	# (instance_count must be known up front).
@@ -1288,27 +1700,12 @@ func _setup_scenery() -> void:
 		attempts += 1
 		var x := rng.randf_range(min_x, max_x)
 		var z := rng.randf_range(min_z, max_z)
-		# Nearest-point linear scan. Also returns the nearest path point's
-		# elevation so we can sit the tree on the ground strip instead of
-		# the y=0 fallback plane.
-		var min_d2 := INF
-		var nearest_ele := 0.0
-		for p in _course_path:
-			var dx := float(p["x_m"]) - x
-			var dz := -float(p["y_m"]) - z
-			var d2 := dx * dx + dz * dz
-			if d2 < min_d2:
-				min_d2 = d2
-				nearest_ele = float(p["elevation_m"])
-				if min_d2 < min_d2_threshold:
-					break
-		if min_d2 < min_d2_threshold:
+		# Off the road — checked against the densified road, not just the
+		# waypoints (a sparse path is one long segment between two points).
+		if _near_road(x, z, MIN_DIST_TO_ROAD):
 			continue
-		# If a heightmap is loaded, plant the tree on the terrain. Otherwise
-		# match the synthetic ground (nearest path elevation − road-bed drop).
-		var ground_y: float = nearest_ele - 0.35
-		if _terrain_width >= 2:
-			ground_y = _terrain_height_at(x, z)
+		# Plant on the ground actually drawn here (terrain or strip).
+		var ground_y := _ground_height_at(x, z)
 		var variety := _pick_tree_variety(rng)
 		placements[variety].append({
 			"pos": Vector3(x, ground_y, z),
@@ -1404,9 +1801,8 @@ func _setup_belleville_dressing() -> void:
 		var tng := _tangent_at_distance(d)
 		var right := Vector3(-tng.z, 0.0, tng.x)
 		var pos := center + right * POLE_SIDE_OFFSET_M
-		# Base sits on the ground: real terrain height if loaded, else the
-		# road-bed elevation (matches the tree fallback).
-		pos.y = _terrain_height_at(pos.x, pos.z) if _terrain_width >= 2 else center.y - 0.35
+		# Base sits on the ground actually drawn there (terrain or strip).
+		pos.y = _ground_height_at(pos.x, pos.z)
 		var yaw := atan2(tng.x, tng.z)
 		xforms.append(Transform3D(Basis(Vector3.UP, yaw), pos))
 		d += spacing
@@ -1476,12 +1872,7 @@ func _setup_towns() -> void:
 		var pos := center + right * (float(entry["offset"]) * side)
 		if not _town_spot_clear(pos, placed_xz):
 			continue
-		pos.y = (
-			_terrain_height_at(pos.x, pos.z)
-			if _terrain_width >= 2
-			else center.y - 0.35
-		)
-		pos.y -= 0.15  # settle the foundation into sloped ground
+		pos.y = _ground_height_at(pos.x, pos.z) - 0.15  # settle into sloped ground
 		# The authored front (+X) faces the road, with a hand-drawn wobble:
 		# yaw jitter plus the signature Belleville lean.
 		var face := (-right * side).normalized()
@@ -1614,15 +2005,10 @@ func _town_proximity() -> float:
 
 
 func _town_spot_clear(pos: Vector3, placed_xz: Array) -> bool:
-	# Off the road: nearest-path-point scan, the tree scatter's approach with
-	# a wider margin for building footprints (a switchback can bring another
-	# part of the course close behind a building's plot).
-	var min_road_sq := TOWN_MIN_ROAD_CLEAR_M * TOWN_MIN_ROAD_CLEAR_M
-	for p in _course_path:
-		var dx: float = float(p["x_m"]) - pos.x
-		var dz: float = -float(p["y_m"]) - pos.z
-		if dx * dx + dz * dz < min_road_sq:
-			return false
+	# Off the road, with a wider margin than trees for building footprints (a
+	# switchback can bring another part of the course close behind a plot).
+	if _near_road(pos.x, pos.z, TOWN_MIN_ROAD_CLEAR_M):
+		return false
 	var min_sp_sq := TOWN_MIN_SPACING_M * TOWN_MIN_SPACING_M
 	for q in placed_xz:
 		var ddx: float = q.x - pos.x
@@ -1671,6 +2057,7 @@ func _add_belleville_mountains(root: Node3D) -> void:
 
 	var xforms: Array = []
 	var colors: Array = []
+	var col_data: Array = []
 	# Two bands (radius/height/width ranges, count, base tint). The far band is
 	# only lightly darkened so the distance fog hazes it toward the sky; the
 	# near band is darker for crisp, saturated teal in front of it.
@@ -1696,7 +2083,9 @@ func _add_belleville_mountains(root: Node3D) -> void:
 			var pz := cos(ang) * r
 			var h := rng.randf_range(band["h0"], band["h1"])
 			var w := rng.randf_range(band["w0"], band["w1"])
-			var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(w, h, w))
+			var yaw := rng.randf_range(0.0, TAU)
+			var basis := Basis(Vector3.UP, yaw).scaled(Vector3(w, h, w))
+			col_data.append([px, pz, yaw, w])
 			# Base ~20 m below the rider (the backdrop origin tracks the rider)
 			# so peaks rise from the horizon; cone is centre-origin, so lift by
 			# half its height.
@@ -1714,6 +2103,32 @@ func _add_belleville_mountains(root: Node3D) -> void:
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = mm
 	root.add_child(inst)
+
+	# Straight-sided columns under each cone (same footprint and facets),
+	# stretched down to the ground by _update_backdrop_depth. Hidden while the
+	# rider is at ground level, where the cone bases already sit underground.
+	var shaft := CylinderMesh.new()
+	shaft.top_radius = 0.5
+	shaft.bottom_radius = 0.5
+	shaft.height = 1.0
+	shaft.radial_segments = 4
+	shaft.rings = 1
+	shaft.cap_top = false
+	shaft.cap_bottom = false
+	shaft.material = mat
+	var cols := MultiMesh.new()
+	cols.transform_format = MultiMesh.TRANSFORM_3D
+	cols.use_colors = true
+	cols.mesh = shaft
+	cols.instance_count = xforms.size()
+	cols.visible_instance_count = 0
+	for i in xforms.size():
+		cols.set_instance_color(i, colors[i])
+	var cols_inst := MultiMeshInstance3D.new()
+	cols_inst.multimesh = cols
+	root.add_child(cols_inst)
+	_backdrop_columns = cols
+	_backdrop_col_data = col_data
 
 
 func _build_pole_mesh() -> ArrayMesh:
@@ -1766,16 +2181,56 @@ func _add_belleville_skyline(root: Node3D) -> void:
 		var h := rng.randf_range(45.0, 115.0)
 		var wdt := rng.randf_range(12.0, 26.0)
 		var base := clump + off
-		var lean := Basis.from_euler(Vector3(
+		var rot := Basis.from_euler(Vector3(
 			deg_to_rad(rng.randf_range(-4.0, 4.0)),
 			deg_to_rad(rng.randf_range(0.0, 360.0)),
 			deg_to_rad(rng.randf_range(-4.0, 4.0)),
-		)).scaled(Vector3(wdt, h, wdt))
+		))
+		var lean := rot.scaled(Vector3(wdt, h, wdt))
 		# Base a touch underground so towers rise straight out of the horizon.
-		mm.set_instance_transform(i, Transform3D(lean, Vector3(base.x, h * 0.5 - 6.0, base.z)))
+		var center := Vector3(base.x, h * 0.5 - 6.0, base.z)
+		mm.set_instance_transform(i, Transform3D(lean, center))
+		_backdrop_tower_data.append([lean, center + lean.y * 0.5])
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = mm
 	root.add_child(inst)
+	_backdrop_towers = mm
+
+
+func _update_backdrop_depth(depth: float) -> void:
+	# Stretch the backdrop down by `depth` metres (the rider's height above the
+	# y = 0 ground) so nothing hovers: tower shafts lengthen with their tops
+	# fixed, and a column fills in under each mountain from its cone base
+	# (20 m under the rider) to 20 m under the ground. The silhouette above
+	# the old bases is untouched, and nothing widens toward the road.
+	if absf(depth - _backdrop_depth) < 0.25:
+		return
+	_backdrop_depth = depth
+	if _backdrop_columns != null:
+		if depth < 0.25:
+			_backdrop_columns.visible_instance_count = 0
+		else:
+			for i in _backdrop_col_data.size():
+				var c: Array = _backdrop_col_data[i]
+				var basis := Basis(Vector3.UP, float(c[2])).scaled(
+					Vector3(float(c[3]), depth, float(c[3]))
+				)
+				_backdrop_columns.set_instance_transform(
+					i, Transform3D(basis, Vector3(float(c[0]), -20.0 - depth * 0.5, float(c[1])))
+				)
+			_backdrop_columns.visible_instance_count = _backdrop_col_data.size()
+	if _backdrop_towers != null:
+		for i in _backdrop_tower_data.size():
+			var t: Array = _backdrop_tower_data[i]
+			var rest: Basis = t[0]
+			var top: Vector3 = t[1]
+			# Lengthen only the shaft axis: the roof, footprint and lean stay
+			# exactly as built (a basis-wide rescale is a world-axis scale in
+			# Godot 4 and sheared the roofs into morphing wedges).
+			var rise := rest.y.y  # vertical extent of the (slightly leaning) shaft
+			var stretch := (rise + depth) / rise
+			var b := Basis(rest.x, rest.y * stretch, rest.z)
+			_backdrop_towers.set_instance_transform(i, Transform3D(b, top - b.y * 0.5))
 
 
 func _setup_sun() -> void:
@@ -2324,6 +2779,7 @@ func _physics_process(delta: float) -> void:
 	# so the peaks hold fixed world bearings as the rider turns.
 	if _backdrop != null:
 		_backdrop.global_position = rider_node.global_position
+		_update_backdrop_depth(maxf(0.0, rider_node.global_position.y))
 	var face_y := _heading_at_distance(distance_m)
 	if heading == -1:
 		face_y += PI

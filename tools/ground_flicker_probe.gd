@@ -11,6 +11,7 @@ extends "res://scripts/world/ride_controller.gd"
 #     --course=/abs/course.json --out=/abs/dir [--frames=8] [--every=1]
 #     [--start=400] [--speed=12] [--hide=plane,strip,post,shadows,hud]
 #     [--metric=N]  (print in-engine flicker % over N frame pairs)
+#     [--view=N]    (camera preset index, 0 = Chase … see camera_rig.gd)
 #
 # Frames land in --out as f00.png, f01.png, … then the app quits.
 
@@ -27,6 +28,7 @@ func _ready() -> void:
 	var start_m := 400.0
 	var speed := 12.0
 	var hide: PackedStringArray = []
+	var view := -1
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--course="):
 			course_file = a.substr(9)
@@ -42,6 +44,8 @@ func _ready() -> void:
 			speed = float(a.substr(8))
 		elif a.begins_with("--hide="):
 			hide = a.substr(7).split(",")
+		elif a.begins_with("--view="):
+			view = int(a.substr(7))
 
 	# The ride's _ready, minus _start_solo/_start_game (network) — same order.
 	GraphicsSettings.quality = GraphicsSettings.Quality.HIGH  # not saved
@@ -76,6 +80,9 @@ func _ready() -> void:
 		for child in get_children():
 			if child is DirectionalLight3D:
 				child.shadow_enabled = false
+
+	if view >= 0 and camera_rig != null and view < camera_rig.view_count():
+		_apply_camera_change(camera_rig.select(view))
 
 	distance_m = start_m
 	velocity_mps = speed
