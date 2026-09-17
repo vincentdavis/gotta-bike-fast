@@ -6,6 +6,8 @@
 
 :{$PORT} {
 	root * /srv
+	# Railway's deploy health check (healthcheckPath in railway.json).
+	respond /healthz "ok" 200
 	# Serve the precompressed *.gz (wasm/pck/js) when the client accepts gzip.
 	file_server {
 		precompressed gzip
