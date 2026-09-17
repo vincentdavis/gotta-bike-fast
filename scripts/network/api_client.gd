@@ -320,6 +320,14 @@ func _tabs_share_saved_login() -> bool:
 	return OS.has_feature("web")
 
 
+func _save_auth_if_ours() -> void:
+	# A renewal or profile fetch must not write this login over a newer one
+	# another window saved: only the login that owns the saved file updates
+	# it. (A sign-in or handoff does take it over — that's _save_auth().)
+	if _saved_login_is(_session_id()):
+		_save_auth()
+
+
 func sign_out() -> void:
 	"""The Log out button: end this game session on the server too, so the
 	website's list of game sign-ins stays true. Local state clears at once;
@@ -365,7 +373,7 @@ func get_me() -> Dictionary:
 		return {}  # asked about a login we no longer hold
 	if result["ok"] and result["json"] is Dictionary:
 		_set_user_from_dict(result["json"])
-		_save_auth()
+		_save_auth_if_ours()
 		return result["json"]
 	return {}
 
@@ -479,7 +487,7 @@ func _try_refresh() -> int:
 	var new_refresh := str(data.get("refresh_token", ""))
 	if not new_refresh.is_empty():
 		_refresh_token = new_refresh
-	_save_auth()
+	_save_auth_if_ours()
 	return _Refresh.OK
 
 
